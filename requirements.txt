@@ -58,3 +58,6 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 ruff==0.16.1
 pip-audit==2.10.1
+# starlette.testclient (used by fastapi.testclient, imported by every API
+# test) prefers this over plain httpx and warns on every import without it.
+httpx2==2.12.0
