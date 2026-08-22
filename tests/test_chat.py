@@ -21,7 +21,11 @@ from backend.chat.session import _mig, chat_graph
 from backend.handoff import validate
 from backend.providers.base import ProviderError
 
-pytestmark = pytest.mark.asyncio
+# No `pytestmark = pytest.mark.asyncio` here: pyproject.toml sets
+# asyncio_mode = "auto", which already detects async def tests in this file.
+# The explicit marker also applied to every *sync* test below, which is what
+# pytest-asyncio was warning about ("marked with asyncio but it is not an
+# async function") on every one of them.
 
 
 # ---------------------------------------------------------------- routing
