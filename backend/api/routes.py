@@ -22,8 +22,13 @@ from backend.council import clarifying_questions, compile_graph, permission_prom
 from backend.engine import Executor, GraphSpec
 from backend.engine.migrations import migrate
 from backend.events import EventStore, EventType
+from backend.handoff import artifact_store
 from backend.permissions.red_agent import red_agent_graph
 from backend.providers.secret_broker import configured_providers
+from backend.workflow_dna.orchestrator_hooks import (
+    decision_payload as dna_decision_payload,
+)
+from backend.workflow_dna.orchestrator_hooks import predict as dna_predict
 from backend.workflow_dna.orchestrator_hooks import predict_and_log, record_and_log
 
 log = logging.getLogger("aco.api")
@@ -214,9 +219,17 @@ async def compile_endpoint(req: CompileRequest) -> dict:
             req.goal, models_, store=store, run_id=run_id, seed=req.seed,
             chairman_policy=req.chairman_policy, answers=req.answers, intent=req.intent,
         )
+        # Workflow DNA: shown here, before the user has locked or approved
+        # anything, because this is the only point a prediction can actually
+        # inform the decision - by the time /runs starts a run, the graph is
+        # already approved and execution begins immediately. Not logged as an
+        # event: no execution run_id exists yet at compile time (this run_id
+        # is only for council-design bookkeeping - /runs mints its own).
+        dna_decision = await dna_predict(graph, run_id)
         return {
             "run_id": run_id,
             "graph": graph.model_dump(),
+            "dna_prediction": dna_decision_payload(dna_decision) if dna_decision else None,
             "council": None if not verdict else {
                 "chairman": verdict.chairman,
                 "borda": verdict.borda,
@@ -348,6 +361,38 @@ async def get_run(run_id: str) -> dict:
 async def events(run_id: str) -> dict:
     async with EventStore() as store:
         return {"events": [e.model_dump() for e in await store.read(run_id)]}
+
+
+@router.get("/runs/{run_id}/output")
+async def output(run_id: str) -> dict:
+    """The run's actual deliverable - what the orchestrator tab shows
+    alongside the graph once a run finishes, answering the goal itself
+    rather than only describing how it was produced.
+
+    A completed run's sink nodes (nothing else in the graph depends on
+    them - typically a verify/report/merge node at the end of a fanout) are
+    what the graph as a whole produced. Their validated outputs were
+    already being written to the artifact store by the engine on every
+    successful node (backend/handoff/artifact_store.py) - this endpoint is
+    the first thing that actually reads them back out.
+    """
+    async with EventStore() as store:
+        row = await store.get_run(run_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        graph = GraphSpec(**migrate(row.graph_spec)).finalize() if row.graph_spec else None
+        sinks = set(graph.sink_node_ids()) if graph else set()
+        artifacts = await artifact_store.for_run(store, run_id)
+        return {
+            "run_id": run_id,
+            "status": row.status,
+            "sink_node_ids": sorted(sinks),
+            "outputs": [
+                {"node_id": a.node_id, "written_by": a.written_by, "content": a.content}
+                for a in artifacts
+                if a.node_id in sinks
+            ],
+        }
 
 
 @router.get("/runs/{run_id}/stream")

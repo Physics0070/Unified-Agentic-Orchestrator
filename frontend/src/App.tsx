@@ -1,13 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   api, streamEvents,
-  type CouncilSummary, type GraphSpec, type LogEvent,
-  type MarginalValueReport, type ReplayDiff, type RunMetrics,
+  type CouncilSummary, type DnaPredictedPayload, type GraphSpec, type LogEvent,
+  type MarginalValueReport, type ReplayDiff, type RunMetrics, type RunOutput,
 } from './api'
 import { ChatPanel } from './ChatPanel'
 import { ClarifyPanel, type Clarification } from './ClarifyPanel'
 import { GraphCanvas, StatusLegend, type NodeStatus } from './GraphCanvas'
-import { Badge, Button, Empty, Panel, SkeletonRows, StepRail } from './ui'
+import { FinalOutput } from './RunOutputPanel'
+import { Badge, Button, Empty, fitnessTone, Panel, SkeletonRows, StepRail } from './ui'
 
 // recharts (MetricsPanel) and the trace/DNA panels are only reachable from
 // the orchestrator tab, never the default chat view, so they're lazy-loaded
@@ -55,6 +56,8 @@ export default function App() {
   const [metrics, setMetrics] = useState<RunMetrics | null>(null)
   const [report, setReport] = useState<MarginalValueReport | null>(null)
   const [replay, setReplay] = useState<{ diff: ReplayDiff; id: string } | null>(null)
+  const [dnaPrediction, setDnaPrediction] = useState<DnaPredictedPayload | null>(null)
+  const [output, setOutput] = useState<RunOutput | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -82,19 +85,21 @@ export default function App() {
   const askClarify = () => guard('clarify', async () => {
     setGraph(null); setRunId(null); setEvents([]); setMetrics(null); setReplay(null)
     setReport(null); setCouncil(null); setSelected(null)
+    setDnaPrediction(null); setOutput(null)
     setClarification(await api.clarify(goal))
   })
 
   const compile = (answers: Record<string, string>) => guard('compile', async () => {
     const r = await api.compile(goal, answers, models, clarification?.plan.intent)
     setGraph(r.graph); setCouncil(r.council); setClarification(null)
+    setDnaPrediction(r.dna_prediction)
   })
 
   const lock = () => graph && setGraph({ ...graph, locked: !graph.locked })
 
   const run = () => guard('run', async () => {
     if (!graph) return
-    setEvents([]); setMetrics(null); setReplay(null); setTab('trace')
+    setEvents([]); setMetrics(null); setReplay(null); setOutput(null); setTab('trace')
     const approvals = graph.nodes.filter((n) => n.type === 'approval').map((n) => n.id)
     const { run_id } = await api.start(goal, graph, approvals)
     setRunId(run_id); setLive(true)
@@ -105,6 +110,7 @@ export default function App() {
       () => {
         setLive(false)
         api.metrics(run_id).then(setMetrics).catch(() => {})
+        api.output(run_id).then(setOutput).catch(() => {})
       },
     )
   })
@@ -302,12 +308,14 @@ export default function App() {
             </Empty>
           ) : graph ? (
             <div className="h-full flex flex-col">
+              {dnaPrediction && <DnaPredictionBanner prediction={dnaPrediction} />}
               <div className="flex-1 min-h-0">
                 <GraphCanvas
                   graph={graph} statuses={statuses} selected={selected} onSelect={setSelected}
                 />
               </div>
               {selected && <NodeInspector graph={graph} id={selected} locked={locked} />}
+              {output && <FinalOutput output={output} />}
               {council && <CouncilStrip council={council} />}
             </div>
           ) : (
@@ -419,6 +427,39 @@ function NodeInspector({ graph, id, locked }: { graph: GraphSpec; id: string; lo
             </div>
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Workflow DNA's predicted fitness for this exact graph, shown here - above
+ * the canvas, before the user has locked or approved anything - because
+ * this is the only point in the flow a prediction can actually inform the
+ * decision. By the time a run starts, the graph is already approved and
+ * execution begins immediately (see backend/api/routes.py's start_run());
+ * a prediction logged only there would arrive too late to matter, which is
+ * exactly what happened before this banner existed.
+ */
+function DnaPredictionBanner({ prediction }: { prediction: DnaPredictedPayload }) {
+  const mut = prediction.mutation_suggestion
+  return (
+    <div className="shrink-0 mb-2 rounded-[10px] border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 flex items-center gap-2 flex-wrap text-[11px]">
+      <span className="text-[var(--color-ink-faint)] uppercase tracking-[0.07em] shrink-0">
+        Predicted fitness
+      </span>
+      <Badge tone={fitnessTone(prediction.predicted_fitness)}>{prediction.predicted_fitness}</Badge>
+      <span className="text-[var(--color-ink-faint)]">
+        {prediction.estimate_source === 'history'
+          ? `from ${prediction.similar_workflow_count} similar past runs`
+          : 'cold start - no similar history yet'}
+      </span>
+      {mut && (
+        <span className="text-[var(--color-warn)]">
+          · a {mut.mutation_type.replace(/_/g, ' ')} variant predicts{' '}
+          <b className="font-semibold">{mut.predicted_fitness}</b> - this graph runs as approved
+          either way, Workflow DNA never rewrites it for you
+        </span>
       )}
     </div>
   )
