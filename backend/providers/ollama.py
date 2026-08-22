@@ -11,8 +11,6 @@ import json
 import time
 from collections.abc import AsyncIterator
 
-import httpx
-
 from backend.providers.base import Completion, ProviderAdapter
 
 
@@ -47,10 +45,10 @@ class OllamaAdapter(ProviderAdapter):
 
         async def call() -> Completion:
             started = time.perf_counter()
-            async with httpx.AsyncClient(base_url=self.handle.base_url, timeout=300.0) as c:
-                r = await c.post("/api/chat", json=body, headers=self.handle.auth_headers())
-                self._classify(r)
-                data = r.json()
+            c = self._client(300.0)
+            r = await c.post("/api/chat", json=body, headers=self.handle.auth_headers())
+            self._classify(r)
+            data = r.json()
             elapsed = int((time.perf_counter() - started) * 1000)
             msg = data.get("message", {})
             return Completion(
@@ -78,21 +76,21 @@ class OllamaAdapter(ProviderAdapter):
         if seed is not None:
             options["seed"] = seed
         body = {"model": model, "messages": messages, "stream": True, "options": options}
-        async with httpx.AsyncClient(base_url=self.handle.base_url, timeout=300.0) as c:
-            async with c.stream(
-                "POST", "/api/chat", json=body, headers=self.handle.auth_headers()
-            ) as r:
-                self._classify(r)
-                async for line in r.aiter_lines():
-                    if not line.strip():
-                        continue
-                    chunk = json.loads(line)
-                    piece = chunk.get("message", {}).get("content")
-                    if piece:
-                        yield piece
+        c = self._client(300.0)
+        async with c.stream(
+            "POST", "/api/chat", json=body, headers=self.handle.auth_headers()
+        ) as r:
+            self._classify(r)
+            async for line in r.aiter_lines():
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                piece = chunk.get("message", {}).get("content")
+                if piece:
+                    yield piece
 
     async def list_models(self) -> list[str]:
-        async with httpx.AsyncClient(base_url=self.handle.base_url, timeout=30.0) as c:
-            r = await c.get("/api/tags", headers=self.handle.auth_headers())
-            self._classify(r)
-            return [m["name"] for m in r.json().get("models", [])]
+        c = self._client(300.0)
+        r = await c.get("/api/tags", headers=self.handle.auth_headers(), timeout=30.0)
+        self._classify(r)
+        return [m["name"] for m in r.json().get("models", [])]

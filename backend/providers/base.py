@@ -45,10 +45,49 @@ class ProviderError(RuntimeError):
 
 
 class ProviderAdapter(ABC):
-    """One adapter per provider. Stateless apart from the handle."""
+    """One adapter per provider. Stateless apart from the handle.
+
+    `adapter_for()` in registry.py builds a fresh adapter instance for every
+    call, so per-instance client state would not help - the HTTP client
+    cache below is process-level instead, keyed by (provider, base_url), and
+    outlives any one adapter. This is the same fix `events/store.py`
+    already made for the Turso connection (see its module docstring: opening
+    a fresh connection per call adds a full TLS handshake every time and was
+    measured 40% slower under concurrent load) - it just hadn't been applied
+    to the provider layer, where every model call was paying a fresh TCP+TLS
+    handshake to Ollama Cloud/Groq/Gemini/OpenRouter on top of the model's
+    own latency.
+    """
+
+    provider: str  # set by each subclass, e.g. OllamaAdapter.provider = "ollama"
+    _clients: dict[tuple[str, str], httpx.AsyncClient] = {}
 
     def __init__(self, handle: ProviderHandle) -> None:
         self.handle = handle
+
+    def _client(self, default_timeout: float) -> httpx.AsyncClient:
+        """Shared keep-alive client for this (provider, base_url).
+
+        Created once and reused for the life of the process - safe without a
+        lock because construction does no I/O and nothing here awaits
+        between the dict lookup and the assignment, so no other coroutine
+        can interleave. `default_timeout` only applies to requests that
+        don't pass their own `timeout=` (see OllamaAdapter.list_models,
+        which needs a shorter one than `complete`/`stream`).
+        """
+        key = (self.provider, self.handle.base_url)
+        client = ProviderAdapter._clients.get(key)
+        if client is None:
+            client = httpx.AsyncClient(base_url=self.handle.base_url, timeout=default_timeout)
+            ProviderAdapter._clients[key] = client
+        return client
+
+    @staticmethod
+    async def aclose_all() -> None:
+        """Closes every cached client. Call once, on app shutdown."""
+        clients, ProviderAdapter._clients = ProviderAdapter._clients, {}
+        for client in clients.values():
+            await client.aclose()
 
     @abstractmethod
     async def complete(

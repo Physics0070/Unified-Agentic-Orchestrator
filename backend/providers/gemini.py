@@ -4,8 +4,6 @@ import json
 import time
 from collections.abc import AsyncIterator
 
-import httpx
-
 from backend.providers.base import Completion, ProviderAdapter, ProviderError
 
 # Published Gemini Flash rates, USD per 1M tokens.
@@ -60,14 +58,14 @@ class GeminiAdapter(ProviderAdapter):
 
         async def call() -> Completion:
             started = time.perf_counter()
-            async with httpx.AsyncClient(base_url=self.handle.base_url, timeout=120.0) as c:
-                r = await c.post(
-                    f"/models/{model}:generateContent",
-                    json=body,
-                    headers=self.handle.auth_headers(),
-                )
-                self._classify(r)
-                data = r.json()
+            c = self._client(120.0)
+            r = await c.post(
+                f"/models/{model}:generateContent",
+                json=body,
+                headers=self.handle.auth_headers(),
+            )
+            self._classify(r)
+            data = r.json()
             elapsed = int((time.perf_counter() - started) * 1000)
             cands = data.get("candidates") or [{}]
             parts = cands[0].get("content", {}).get("parts") or [{}]
@@ -97,19 +95,19 @@ class GeminiAdapter(ProviderAdapter):
         body: dict = {"contents": contents, "generationConfig": {"temperature": temperature}}
         if system:
             body["systemInstruction"] = {"parts": [{"text": system}]}
-        async with httpx.AsyncClient(base_url=self.handle.base_url, timeout=120.0) as c:
-            async with c.stream(
-                "POST",
-                f"/models/{model}:streamGenerateContent?alt=sse",
-                json=body,
-                headers=self.handle.auth_headers(),
-            ) as r:
-                self._classify(r)
-                async for line in r.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    chunk = json.loads(line[6:])
-                    for cand in chunk.get("candidates", []):
-                        for part in cand.get("content", {}).get("parts", []):
-                            if part.get("text"):
-                                yield part["text"]
+        c = self._client(120.0)
+        async with c.stream(
+            "POST",
+            f"/models/{model}:streamGenerateContent?alt=sse",
+            json=body,
+            headers=self.handle.auth_headers(),
+        ) as r:
+            self._classify(r)
+            async for line in r.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                chunk = json.loads(line[6:])
+                for cand in chunk.get("candidates", []):
+                    for part in cand.get("content", {}).get("parts", []):
+                        if part.get("text"):
+                            yield part["text"]
