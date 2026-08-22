@@ -182,15 +182,20 @@ with `ollama list`. Not required otherwise - it is not on the default path.
 | `OLLAMA_MODELS` | no | `llama3.2:3b,qwen2.5:7b` | Comma-separated tags, no `ollama:` prefix - local and `:cloud` tags are interchangeable |
 | `GROQ_API_KEY` | no | — | Additive - widens the council with a different model family when set |
 | `GEMINI_API_KEY` | no | — | Additive - widens the council with a different model family when set |
+| `OPENROUTER_API_KEY` | no | — | Not part of the default mix; reachable only by explicitly passing an `openrouter:model` spec in a request |
 | `MAX_CONCURRENT_MODEL_CALLS` | no | `4` | Caps simultaneous in-flight model calls across the council |
 | `MAX_REPAIR_ATTEMPTS` | no | `2` | Repair retries before a branch fails |
 | `DEFAULT_SEED` | no | `42` | Recorded per run; required for replay |
+| `DEFAULT_TEMPERATURE` | no | `0.0` | Passed to every provider call |
 | `DEFAULT_BUDGET_TOKENS` | no | `8000` | Engine-enforced, per agent |
 | `DEFAULT_TIMEOUT_S` | no | `60` | Engine-enforced, per agent |
 | `SECRET_KEY` | prod only | — | Prod refuses to boot without it |
 | `CORS_ORIGINS` | no | `http://localhost:5173` | Explicit allow-list; `*` is rejected |
 | `FRONTEND_ORIGIN` | prod only | — | Deployed frontend's exact origin; Netlify preview subdomains are matched separately by `.netlify.app` suffix |
+| `MAX_UPLOAD_BYTES` | no | `5242880` | Cap on a single uploaded file, in bytes |
 | `RATE_LIMIT_*` | no | see `.env.example` | No threshold is hardcoded |
+| `LOG_LEVEL` | no | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `PORT` | no | `7860` | Render sets this itself in prod; local-dev fallback only |
 
 Provider keys are read by **one module**, `backend/providers/secret_broker.py`.
 Nowhere else. They never enter a log line, an event payload, or the frontend

@@ -273,10 +273,7 @@ class Executor:
 
         # Sink nodes (nothing downstream inside the subgraph) are its outputs -
         # what the parent graph sees this node as having produced.
-        sinks = [
-            n.id for n in node.subgraph.nodes
-            if n.type != "compensate" and not node.subgraph.children(n.id)
-        ]
+        sinks = node.subgraph.sink_node_ids()
         output = {s: child.outputs[s] for s in sinks if s in child.outputs}
         return NodeResult(node_id=node.id, ok=not failed, output=output, latency_ms=elapsed)
 

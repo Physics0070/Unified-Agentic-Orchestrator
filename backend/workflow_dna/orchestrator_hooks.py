@@ -69,25 +69,31 @@ def _dna_from_graph(graph: GraphSpec, workflow_id: str) -> WorkflowDNA:
     )
 
 
-async def predict_and_log(
-    store: EventStore, graph: GraphSpec, workflow_id: str
-) -> DNADecision | None:
+async def predict(graph: GraphSpec, workflow_id: str) -> DNADecision | None:
     """
-    Predicts fitness for the workflow about to run, and — if predicted
-    fitness is below threshold — generates ONE mutation suggestion for
-    comparison. ADVISORY ONLY: never rewrites `graph` itself; a human
-    or the existing approval-gate flow decides whether to act on the
-    suggestion. Logs the result as a DNA_PREDICTED event.
+    Predicts fitness for `graph` — and, if predicted fitness is below
+    threshold, generates ONE mutation suggestion for comparison — without
+    logging anything. Split out of `predict_and_log()` so the compile step
+    (`POST /api/compile` in routes.py) can show this to the user *before*
+    they approve a graph, which is the only point a prediction can actually
+    inform a decision: `predict_and_log()` below runs at `POST /api/runs`,
+    by which point the graph is already locked and approved and execution
+    starts immediately after - too late for the prediction to change
+    anything, only to be logged for the record.
     """
     service = _get_service()
     dna = _dna_from_graph(graph, workflow_id)
-
     try:
-        decision = service.evaluate_workflow(dna)
+        return service.evaluate_workflow(dna)
     except Exception:
         log.exception("Workflow DNA prediction failed for %s; continuing without it", workflow_id)
         return None
 
+
+def decision_payload(decision: DNADecision) -> dict:
+    """JSON-shapes a DNADecision. Shared by the DNA_PREDICTED event payload
+    below and the /api/compile response in routes.py, so the two surfaces
+    - one logged, one shown pre-approval - never drift out of sync."""
     payload = {
         "predicted_fitness": decision.original.predicted_fitness,
         "estimate_source": decision.original.estimated_outcome.source,
@@ -100,8 +106,22 @@ async def predict_and_log(
             "predicted_fitness": decision.mutated.predicted_fitness,
             "note": "Advisory only — not automatically applied to the graph.",
         }
+    return payload
 
-    await store.append(workflow_id, EventType.DNA_PREDICTED, payload=payload)
+
+async def predict_and_log(
+    store: EventStore, graph: GraphSpec, workflow_id: str
+) -> DNADecision | None:
+    """
+    Predicts fitness for the workflow about to run (see `predict()`) and
+    logs the result as a DNA_PREDICTED event against this run's own id, so
+    it lands in *this run's* trace and the predicted-vs-actual comparison
+    in the Workflow DNA panel. ADVISORY ONLY: never rewrites `graph` itself.
+    """
+    decision = await predict(graph, workflow_id)
+    if decision is None:
+        return None
+    await store.append(workflow_id, EventType.DNA_PREDICTED, payload=decision_payload(decision))
     return decision
 
 

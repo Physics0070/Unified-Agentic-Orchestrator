@@ -4,8 +4,6 @@ import json
 import time
 from collections.abc import AsyncIterator
 
-import httpx
-
 from backend.providers.base import Completion, ProviderAdapter, ProviderError, ToolCall
 
 # Published Groq rates, USD per 1M tokens. Used only to report real spend; if a
@@ -53,12 +51,10 @@ class GroqAdapter(ProviderAdapter):
 
         async def call() -> Completion:
             started = time.perf_counter()
-            async with httpx.AsyncClient(base_url=self.handle.base_url, timeout=120.0) as c:
-                r = await c.post(
-                    "/chat/completions", json=body, headers=self.handle.auth_headers()
-                )
-                self._classify(r)
-                data = r.json()
+            c = self._client(120.0)
+            r = await c.post("/chat/completions", json=body, headers=self.handle.auth_headers())
+            self._classify(r)
+            data = r.json()
             elapsed = int((time.perf_counter() - started) * 1000)
             choice = data["choices"][0]["message"]
             usage = data.get("usage", {})
@@ -99,17 +95,17 @@ class GroqAdapter(ProviderAdapter):
         }
         if seed is not None:
             body["seed"] = seed
-        async with httpx.AsyncClient(base_url=self.handle.base_url, timeout=120.0) as c:
-            async with c.stream(
-                "POST", "/chat/completions", json=body, headers=self.handle.auth_headers()
-            ) as r:
-                self._classify(r)
-                async for line in r.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    raw = line[6:].strip()
-                    if raw == "[DONE]":
-                        break
-                    delta = json.loads(raw)["choices"][0].get("delta", {}).get("content")
-                    if delta:
-                        yield delta
+        c = self._client(120.0)
+        async with c.stream(
+            "POST", "/chat/completions", json=body, headers=self.handle.auth_headers()
+        ) as r:
+            self._classify(r)
+            async for line in r.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if raw == "[DONE]":
+                    break
+                delta = json.loads(raw)["choices"][0].get("delta", {}).get("content")
+                if delta:
+                    yield delta

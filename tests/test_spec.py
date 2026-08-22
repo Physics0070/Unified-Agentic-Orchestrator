@@ -125,3 +125,52 @@ def test_never_finalize_a_nested_subgraph_independently():
         "parent's hash even though nothing about the executable shape "
         "changed - confirms why subgraphs must stay unfinalized when embedded"
     )
+
+
+# ---------------------------------------------------------------- sinks
+
+
+def test_sink_node_ids_is_the_node_nothing_downstream_consumes():
+    g = GraphSpec(
+        nodes=[
+            Node(id="start", type="fanout"),
+            Node(id="security", type="agent", agent=agent("security")),
+            Node(id="quality", type="agent", agent=agent("quality")),
+            Node(id="merge", type="join"),
+        ],
+        edges=[
+            Edge(from_node="start", to_node="security"),
+            Edge(from_node="start", to_node="quality"),
+            Edge(from_node="security", to_node="merge"),
+            Edge(from_node="quality", to_node="merge"),
+        ],
+    )
+    assert g.sink_node_ids() == ["merge"]
+
+
+def test_sink_node_ids_excludes_compensators_even_though_they_have_no_children():
+    g = GraphSpec(
+        nodes=[
+            Node(id="writer", type="agent", agent=agent("writer", allowed_side_effects=["write"])),
+            Node(id="comp", type="compensate", compensates="writer"),
+        ],
+        edges=[],
+    )
+    assert g.sink_node_ids() == ["writer"]
+
+
+def test_sink_node_ids_of_a_single_node_graph_is_that_node():
+    g = GraphSpec(nodes=[Node(id="only", type="agent", agent=agent("only"))], edges=[])
+    assert g.sink_node_ids() == ["only"]
+
+
+def test_sink_node_ids_can_be_more_than_one_for_a_graph_with_two_independent_endings():
+    g = GraphSpec(
+        nodes=[
+            Node(id="start", type="fanout"),
+            Node(id="a", type="agent", agent=agent("a")),
+            Node(id="b", type="agent", agent=agent("b")),
+        ],
+        edges=[Edge(from_node="start", to_node="a"), Edge(from_node="start", to_node="b")],
+    )
+    assert sorted(g.sink_node_ids()) == ["a", "b"]

@@ -103,6 +103,16 @@ export interface DnaRecordedPayload {
   predicted_fitness: number | null
 }
 
+/** GET /api/runs/{run_id}/output — the run's actual deliverable, read back
+ * from the artifact store for whichever node(s) nothing else in the graph
+ * depends on (a report/verify/merge node, typically). */
+export interface RunOutput {
+  run_id: string
+  status: string
+  sink_node_ids: string[]
+  outputs: { node_id: string | null; written_by: string; content: unknown }[]
+}
+
 /** One row from Workflow DNA's history db — GET /api/workflow-dna/history. */
 export interface WorkflowDnaExecution {
   workflow_id: string
@@ -190,7 +200,10 @@ export const api = {
     }>('/api/clarify', { method: 'POST', body: JSON.stringify({ goal }) }),
 
   compile: (goal: string, answers: Record<string, string>, models: string[], intent?: string) =>
-    req<{ run_id: string; graph: GraphSpec; council: CouncilSummary | null }>(
+    req<{
+      run_id: string; graph: GraphSpec; council: CouncilSummary | null
+      dna_prediction: DnaPredictedPayload | null
+    }>(
       '/api/compile',
       { method: 'POST', body: JSON.stringify({ goal, answers, models, intent }) }),
 
@@ -199,6 +212,7 @@ export const api = {
       '/api/runs', { method: 'POST', body: JSON.stringify({ goal, graph, approvals }) }),
 
   events: (runId: string) => req<{ events: LogEvent[] }>(`/api/runs/${runId}/events`),
+  output: (runId: string) => req<RunOutput>(`/api/runs/${runId}/output`),
   metrics: (runId: string) => req<RunMetrics>(`/api/runs/${runId}/metrics`),
   replay: (runId: string) =>
     req<{ replay_run_id: string; diff: ReplayDiff; cost_saved_usd: number }>(

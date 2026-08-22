@@ -6,6 +6,7 @@ Run from the repository root:
 """
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -20,6 +21,7 @@ from slowapi.util import get_remote_address
 from backend import __version__
 from backend.api import router as api_router
 from backend.config import settings
+from backend.providers.base import ProviderAdapter
 
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)-8s %(message)s")
 log = logging.getLogger("aco")
@@ -29,12 +31,24 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 limiter = Limiter(key_func=get_remote_address, default_limits=[settings.rate_limit_public])
 
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    yield
+    # Each provider adapter keeps one keep-alive httpx.AsyncClient per
+    # (provider, base_url) for the process lifetime (see ProviderAdapter._client)
+    # instead of opening a fresh connection per model call - closed here so a
+    # graceful shutdown doesn't leak open sockets.
+    await ProviderAdapter.aclose_all()
+
+
 app = FastAPI(
     title="Agent Council Orchestrator",
     version=__version__,
     # Interactive docs are a dev affordance, not something to expose in prod.
     docs_url=None if settings.is_prod else "/docs",
     redoc_url=None,
+    lifespan=_lifespan,
 )
 
 app.state.limiter = limiter

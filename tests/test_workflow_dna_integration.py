@@ -29,6 +29,8 @@ from backend.workflow_dna import orchestrator_hooks as hooks
 from backend.workflow_dna.history.repository import WorkflowHistoryRepository
 from backend.workflow_dna.orchestrator_hooks import (
     _dna_from_graph,
+    decision_payload,
+    predict,
     predict_and_log,
     record_and_log,
 )
@@ -131,6 +133,39 @@ async def test_predict_and_log_appends_dna_predicted_event(isolated_service):
     assert run_id == "wf_test_3"
     assert event_type == EventType.DNA_PREDICTED
     assert "predicted_fitness" in payload
+
+
+async def test_predict_returns_the_same_decision_without_a_store_or_logging(isolated_service):
+    """predict() is predict_and_log() minus the event write - this is what
+    lets /api/compile show a prediction before a run_id for real execution
+    even exists, instead of only logging one after the graph is already
+    approved (see routes.py's compile_endpoint and orchestrator_hooks.py's
+    module docstring on predict() vs predict_and_log())."""
+    graph = GraphSpec(nodes=[_agent_node("a")], edges=[]).finalize()
+
+    decision = await predict(graph, "wf_test_precompile")
+
+    assert decision is not None
+    assert decision.original.predicted_fitness >= 0
+
+
+def test_decision_payload_matches_what_predict_and_log_puts_on_the_wire(isolated_service):
+    """Both the DNA_PREDICTED event (predict_and_log) and the /api/compile
+    response (routes.py) build their JSON from this one function - this
+    pins its shape so the two surfaces can't silently drift apart."""
+    graph = GraphSpec(nodes=[_agent_node("a")], edges=[]).finalize()
+    dna = _dna_from_graph(graph, "wf_test_payload_shape")
+    decision = hooks._get_service().evaluate_workflow(dna)
+
+    payload = decision_payload(decision)
+
+    assert payload["predicted_fitness"] == decision.original.predicted_fitness
+    assert payload["estimate_source"] == decision.original.estimated_outcome.source
+    assert payload["threshold_met_without_mutation"] == decision.threshold_met_without_mutation
+    if decision.mutated is not None:
+        assert payload["mutation_suggestion"]["mutation_type"] == decision.mutated_dna.mutation_type
+    else:
+        assert "mutation_suggestion" not in payload
 
 
 async def test_record_and_log_appends_dna_recorded_event(isolated_service):

@@ -1,14 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { DnaPredictedPayload, DnaRecordedPayload, LogEvent, WorkflowDnaExecution } from './api'
 import { api } from './api'
-import { Badge, Empty, Stat } from './ui'
-
-/** Same three-band read as the rest of this app's Stat/Badge tones. */
-function fitnessTone(f: number): 'good' | 'warn' | 'bad' {
-  if (f >= 70) return 'good'
-  if (f >= 50) return 'warn'
-  return 'bad'
-}
+import { Badge, Empty, fitnessTone, Stat } from './ui'
 
 export function WorkflowDNAPanel({ events, runId }: { events: LogEvent[]; runId: string | null }) {
   const [history, setHistory] = useState<WorkflowDnaExecution[]>([])

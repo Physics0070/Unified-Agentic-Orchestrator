@@ -121,6 +121,17 @@ class GraphSpec(BaseModel):
     def children(self, node_id: str) -> list[str]:
         return [e.to_node for e in self.edges if e.from_node == node_id]
 
+    def sink_node_ids(self) -> list[str]:
+        """Nodes nothing else in the graph depends on - compensators aside,
+        these are what a completed run actually produced as its result (a
+        merge/verify/report node at the end of a fanout, typically). Used to
+        find the run's final output among all the nodes that executed along
+        the way. Same definition executor.py already used inline for a
+        subgraph node's own output; factored out so both share one
+        definition instead of drifting apart.
+        """
+        return [n.id for n in self.nodes if n.type != "compensate" and not self.children(n.id)]
+
     def edge(self, from_node: str, to_node: str) -> Edge | None:
         for e in self.edges:
             if e.from_node == from_node and e.to_node == to_node:

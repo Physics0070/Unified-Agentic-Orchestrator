@@ -96,6 +96,13 @@ export function Stat({ label, value, tone = 'default', hint }: {
   )
 }
 
+/** Same three-band read used everywhere a 0-100 score (fitness, quality) is shown. */
+export function fitnessTone(score: number): 'good' | 'warn' | 'bad' {
+  if (score >= 70) return 'good'
+  if (score >= 50) return 'warn'
+  return 'bad'
+}
+
 const BADGE_TONES = {
   default: 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]',
   good: 'bg-[#34d3991f] text-[var(--color-done)]',
