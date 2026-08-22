@@ -6,6 +6,23 @@
    hex, so the whole theme swaps here. Every text/surface pair below clears
    4.5:1; status colours are never the only signal (each is paired with a label
    or a glyph) so the UI still reads without colour vision.
+
+   Theme: neomorphism (soft dual-shadow depth) + glassmorphism (translucent
+   blurred surfaces), layered on the existing dark base rather than the
+   classic light-pastel neumorphism recipe - pure light neumorphism reads as
+   low-contrast by construction (a known, documented accessibility weakness
+   of the style) and would fight this app's own 4.5:1 rule above. The dark
+   adaptation used here keeps every text colour exactly as high-contrast as
+   before; only surface depth is achieved with shadow, never with a lighter
+   background tinting text along with it. Two depth languages, used for two
+   different jobs:
+     - neo-raised / neo-inset  -> solid, opaque surfaces (cards, inputs,
+       buttons) that need to read clearly on their own - soft dual shadow
+       (a light tint + true black) stands in for the physical light source
+       classic neumorphism implies, calibrated per surface tone.
+     - glass / glass-strong    -> surfaces that float ABOVE other content
+       (header, tab strip, drawer, modals) - translucent + backdrop-blur, so
+       the ambient background gradient still reads through them.
    --------------------------------------------------------------------------- */
 @theme {
   /* surfaces, darkest to lightest */
@@ -39,7 +56,19 @@
   --font-sans: 'Inter var', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Consolas, monospace;
 
-  --radius-panel: 14px;
+  --radius-panel: 16px;
+
+  /* neomorphism: dual shadow calibrated for a dark surface - a lighter tint
+     standing in for the "light" side, true black for the "shadow" side. */
+  --shadow-neo-light: rgba(255, 255, 255, 0.045);
+  --shadow-neo-dark: rgba(0, 0, 0, 0.6);
+  --shadow-neo-light-strong: rgba(255, 255, 255, 0.07);
+
+  /* glassmorphism: translucent surfaces over the ambient body gradient */
+  --glass-bg: rgba(23, 23, 28, 0.55);
+  --glass-bg-strong: rgba(12, 12, 15, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-blur: 18px;
 }
 
 html { color-scheme: dark; }
@@ -48,6 +77,7 @@ body {
   background:
     radial-gradient(60rem 40rem at 15% -10%, #0d2b28 0%, transparent 60%),
     radial-gradient(50rem 34rem at 100% 0%, #16203a 0%, transparent 55%),
+    radial-gradient(40rem 30rem at 50% 100%, #1a1030 0%, transparent 50%),
     var(--color-surface-0);
   background-attachment: fixed;
   color: var(--color-ink);
@@ -61,6 +91,71 @@ body {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: 6px;
+}
+
+/* ---------------------------------------------------------------------------
+   Neomorphism + glassmorphism utilities. Shared across ui.tsx and every
+   panel/component built from it, so the two visual languages stay
+   consistent instead of each file inventing its own shadow values.
+   --------------------------------------------------------------------------- */
+
+.neo-raised {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-line);
+  box-shadow:
+    -6px -6px 16px var(--shadow-neo-light),
+    7px 7px 18px var(--shadow-neo-dark);
+}
+
+.neo-inset {
+  background: var(--color-surface-0);
+  border: 1px solid var(--color-line);
+  box-shadow:
+    inset -4px -4px 10px var(--shadow-neo-light),
+    inset 4px 4px 12px var(--shadow-neo-dark);
+}
+
+/* Raised at rest, presses into its own inset on click - the tactile read
+   neomorphism is named for. transform is the only geometry-adjacent property
+   animated (translateY, not width/height), so this stays compositor-only. */
+.neo-pressable {
+  transition: box-shadow 150ms ease, transform 150ms ease, border-color 150ms ease;
+}
+.neo-pressable:active:not(:disabled) {
+  box-shadow:
+    inset -3px -3px 8px var(--shadow-neo-light),
+    inset 3px 3px 10px var(--shadow-neo-dark);
+  transform: translateY(1px);
+}
+
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+}
+
+.glass-strong {
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+}
+
+/* Glassmorphism's signature top-edge light catch - a single soft highlight
+   along the upper border, as if lit from above. Decorative only: layered
+   with ::before so it never competes with content or focus rings. */
+.glass-sheen {
+  position: relative;
+  overflow: hidden;
+}
+.glass-sheen::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  pointer-events: none;
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -170,17 +265,21 @@ body {
 .chat-sugg button {
   text-align: left;
   padding: 11px 14px;
-  border-radius: 10px;
+  border-radius: 12px;
+  background: var(--color-surface-2);
   border: 1px solid var(--color-line);
-  background: var(--color-surface-1);
+  box-shadow: -4px -4px 10px var(--shadow-neo-light), 5px 5px 12px var(--shadow-neo-dark);
   color: var(--color-ink-muted);
   font-size: 13px;
+  cursor: pointer;
   transition: all 0.15s;
 }
 .chat-sugg button:hover:not(:disabled) {
   border-color: var(--color-line-strong);
-  background: var(--color-surface-2);
   color: var(--color-ink);
+}
+.chat-sugg button:active:not(:disabled) {
+  box-shadow: inset -3px -3px 8px var(--shadow-neo-light), inset 3px 3px 10px var(--shadow-neo-dark);
 }
 .chat-sugg button:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -190,9 +289,11 @@ body {
   margin-left: auto;
   max-width: 82%;
   width: fit-content;
-  background: var(--color-surface-3);
-  border: 1px solid var(--color-line-strong);
-  border-radius: 14px 14px 3px 14px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  border-radius: 16px 16px 4px 16px;
   padding: 10px 14px;
   font-size: 14px;
   line-height: 1.55;
@@ -225,9 +326,10 @@ body {
 .chat-li:has(.chat-num)::before { display: none; }
 
 .chat-code {
-  background: var(--color-surface-1);
+  background: var(--color-surface-0);
   border: 1px solid var(--color-line);
-  border-radius: 10px;
+  box-shadow: inset -3px -3px 8px var(--shadow-neo-light), inset 3px 3px 10px var(--shadow-neo-dark);
+  border-radius: 12px;
   padding: 12px 14px;
   margin: 12px 0;
   overflow-x: auto;
@@ -239,7 +341,7 @@ body {
 .chat-inline-code {
   font-family: var(--font-mono);
   font-size: 0.88em;
-  background: var(--color-surface-2);
+  background: var(--color-surface-0);
   border: 1px solid var(--color-line);
   border-radius: 5px;
   padding: 1px 5px;
@@ -310,26 +412,29 @@ body {
 .composer-toggle {
   height: 28px;
   padding: 0 10px;
-  border-radius: 7px;
-  border: 1px solid var(--color-line-strong);
-  background: var(--color-surface-1);
+  border-radius: 8px;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-2);
+  box-shadow: -3px -3px 7px var(--shadow-neo-light), 3px 3px 8px var(--shadow-neo-dark);
   color: var(--color-ink-faint);
   font-size: 11px;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 .composer-toggle:hover { color: var(--color-ink-muted); }
 .composer-toggle.is-active {
   color: var(--color-accent);
   border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface-1));
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface-2));
+  box-shadow: inset -2px -2px 6px var(--shadow-neo-light), inset 2px 2px 7px var(--shadow-neo-dark);
 }
 .composer-select {
   height: 28px;
   padding: 0 8px;
-  border-radius: 7px;
-  border: 1px solid var(--color-line-strong);
-  background: var(--color-surface-1);
+  border-radius: 8px;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-0);
+  box-shadow: inset -2px -2px 6px var(--shadow-neo-light), inset 2px 2px 7px var(--shadow-neo-dark);
   color: var(--color-ink-muted);
   font-size: 11px;
   cursor: pointer;
@@ -338,9 +443,11 @@ body {
   display: inline-flex; align-items: center; gap: 6px;
   margin-top: 8px;
   padding: 7px 12px;
-  border-radius: 9px;
-  border: 1px solid var(--color-line-strong);
-  background: var(--color-surface-1);
+  border-radius: 10px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   color: var(--color-accent);
   font-size: 12px;
   text-decoration: none;
@@ -359,9 +466,10 @@ body {
 .composer textarea {
   flex: 1;
   resize: none;
-  background: var(--color-surface-1);
-  border: 1px solid var(--color-line-strong);
-  border-radius: 12px;
+  background: var(--color-surface-0);
+  border: 1px solid var(--color-line);
+  box-shadow: inset -4px -4px 10px var(--shadow-neo-light), inset 4px 4px 12px var(--shadow-neo-dark);
+  border-radius: 14px;
   padding: 12px 14px;
   color: var(--color-ink);
   font-size: 14px;
@@ -380,8 +488,9 @@ body {
 
 .drawer-scrim {
   position: fixed; inset: 0;
-  background: #000a;
-  backdrop-filter: blur(2px);
+  background: #0006;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   z-index: 50;
   display: flex; justify-content: flex-end;
 }
@@ -389,8 +498,11 @@ body {
   width: min(420px, 100vw);
   height: 100%;
   overflow-y: auto;
-  background: var(--color-surface-1);
-  border-left: 1px solid var(--color-line-strong);
+  background: var(--glass-bg-strong);
+  border-left: 1px solid var(--glass-border);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: -16px 0 40px -20px #000c;
   padding: 20px 22px 40px;
   animation: drawer-in 0.18s ease-out;
 }
@@ -428,7 +540,8 @@ body {
   color: var(--color-ink-faint);
   background: var(--color-surface-0);
   border: 1px solid var(--color-line);
-  border-radius: 7px;
+  box-shadow: inset -2px -2px 6px var(--shadow-neo-light), inset 2px 2px 7px var(--shadow-neo-dark);
+  border-radius: 8px;
   padding: 7px 9px;
   overflow-wrap: anywhere;
 }
@@ -465,8 +578,10 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--color-line);
-  background: var(--color-surface-1);
+  border-right: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
 }
 .chat-sidebar-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -481,11 +596,17 @@ body {
   font-size: 11.5px;
   color: var(--color-accent);
   padding: 4px 9px;
-  border-radius: 7px;
-  border: 1px solid var(--color-line-strong);
-  transition: background 0.15s;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: var(--color-surface-2);
+  box-shadow: -2px -2px 6px var(--shadow-neo-light), 2px 2px 7px var(--shadow-neo-dark);
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
 }
-.chat-sidebar-new:hover { background: var(--color-surface-2); }
+.chat-sidebar-new:hover { background: var(--color-surface-3); }
+.chat-sidebar-new:active {
+  box-shadow: inset -2px -2px 5px var(--shadow-neo-light), inset 2px 2px 6px var(--shadow-neo-dark);
+}
 .chat-sidebar-list { flex: 1; overflow-y: auto; padding: 8px; }
 .chat-sidebar-empty {
   font-size: 12px; color: var(--color-ink-faint); padding: 10px 8px; line-height: 1.5;
@@ -494,13 +615,18 @@ body {
   display: flex; flex-direction: column; gap: 2px;
   width: 100%; text-align: left;
   padding: 9px 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   margin-bottom: 2px;
   color: var(--color-ink-muted);
-  transition: background 0.15s;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
 }
 .chat-sidebar-item:hover { background: var(--color-surface-2); }
-.chat-sidebar-item.is-active { background: var(--color-surface-3); color: var(--color-ink); }
+.chat-sidebar-item.is-active {
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+  box-shadow: inset -2px -2px 6px var(--shadow-neo-light), inset 2px 2px 7px var(--shadow-neo-dark);
+}
 .chat-sidebar-item-title {
   font-size: 12.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -513,8 +639,10 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: 1px solid var(--color-line);
-  background: var(--color-surface-1);
+  border-left: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
 }
 .workflow-head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;

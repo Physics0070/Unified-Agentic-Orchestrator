@@ -137,12 +137,12 @@ export default function App() {
   return (
     <div className="h-screen flex flex-col">
       {/* ---------------------------------------------------------- header */}
-      <header className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface-1)]/70 backdrop-blur">
+      <header className="glass-strong shrink-0 border-b border-[var(--glass-border)] shadow-[0_4px_24px_-8px_#000a]">
         <div className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
           <div className="flex items-center gap-2.5 min-w-0">
             <span
               aria-hidden
-              className="grid place-items-center h-7 w-7 rounded-lg bg-[var(--color-accent)] text-[#032420] text-[13px] font-bold"
+              className="grid place-items-center h-7 w-7 rounded-lg bg-[var(--color-accent)] text-[#032420] text-[13px] font-bold shadow-[0_0_18px_-2px_var(--color-accent-deep),0_1px_0_0_#ffffff55_inset]"
             >
               ⌘
             </span>
@@ -150,20 +150,17 @@ export default function App() {
               <h1 className="text-[14px] font-semibold leading-tight">
                 Agent Council Orchestrator
               </h1>
-              <p className="text-[10px] text-[var(--color-ink-faint)] font-mono leading-tight">
-                AE-03 · Latency Zero
-              </p>
             </div>
           </div>
 
-          <div className="ml-4 flex items-center gap-1 p-0.5 rounded-[9px] bg-[var(--color-surface-2)] border border-[var(--color-line)]">
+          <div className="ml-4 flex items-center gap-1 p-0.5 rounded-[10px] neo-inset">
             {(['chat', 'orchestrator'] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
-                className={`px-3 h-7 rounded-[7px] text-[12px] capitalize transition-colors ${
+                className={`px-3 h-7 rounded-[7px] text-[12px] capitalize cursor-pointer transition-all duration-150 ${
                   mode === m
-                    ? 'bg-[var(--color-surface-4)] text-[var(--color-ink)]'
+                    ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)] shadow-[-2px_-2px_5px_var(--shadow-neo-light-strong),2px_2px_6px_var(--shadow-neo-dark)]'
                     : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink-muted)]'
                 }`}
               >
@@ -211,7 +208,7 @@ export default function App() {
               onChange={(e) => setGoal(e.target.value)}
               aria-label="Goal"
               placeholder="Describe your goal in plain English"
-              className="w-full min-h-11 pl-3 pr-16 rounded-[10px] bg-[var(--color-surface-2)] border border-[var(--color-line)] text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none transition-colors"
+              className="neo-inset w-full min-h-11 pl-3 pr-16 rounded-[10px] text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none transition-colors"
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[var(--color-ink-faint)] tabular-nums pointer-events-none">
               {goal.trim().length}
@@ -272,7 +269,7 @@ export default function App() {
       )}
 
       {mode === 'orchestrator' && replay && (
-        <div className="shrink-0 px-4 py-2 border-b border-[var(--color-line)] bg-[var(--color-surface-2)] flex items-center gap-3 flex-wrap text-[12px]">
+        <div className="glass shrink-0 px-4 py-2 border-b border-[var(--glass-border)] flex items-center gap-3 flex-wrap text-[12px]">
           <Badge tone={replay.diff.identical ? 'good' : 'bad'}>
             {replay.diff.identical ? '✓ DIFF IS ZERO' : `${replay.diff.output_diffs.length} DIFFS`}
           </Badge>
@@ -337,14 +334,14 @@ export default function App() {
           }
           className="min-h-[340px]"
           right={
-            <div className="flex gap-0.5 p-0.5 rounded-lg bg-[var(--color-surface-2)]">
+            <div className="flex gap-0.5 p-0.5 rounded-lg neo-inset">
               {(['trace', 'metrics', 'dna'] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
-                  className={`min-h-8 px-2.5 rounded-md text-[11px] transition-colors ${
+                  className={`min-h-8 px-2.5 rounded-md text-[11px] cursor-pointer transition-all duration-150 ${
                     tab === t
-                      ? 'bg-[var(--color-surface-4)] text-[var(--color-ink)]'
+                      ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)] shadow-[-2px_-2px_5px_var(--shadow-neo-light-strong),2px_2px_6px_var(--shadow-neo-dark)]'
                       : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink-muted)]'
                   }`}
                 >
@@ -382,7 +379,7 @@ function NodeInspector({ graph, id, locked }: { graph: GraphSpec; id: string; lo
   const incoming = graph.edges.filter((e) => e.to_node === id)
 
   return (
-    <div className="shrink-0 border-t border-[var(--color-line)] bg-[var(--color-surface-2)] p-3 text-[11px] max-h-[200px] overflow-auto">
+    <div className="glass shrink-0 border-t border-[var(--glass-border)] p-3 text-[11px] max-h-[200px] overflow-auto">
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <span className="font-semibold text-[12px]">{node.id}</span>
         <Badge>{node.type}</Badge>
@@ -444,7 +441,7 @@ function NodeInspector({ graph, id, locked }: { graph: GraphSpec; id: string; lo
 function DnaPredictionBanner({ prediction }: { prediction: DnaPredictedPayload }) {
   const mut = prediction.mutation_suggestion
   return (
-    <div className="shrink-0 mb-2 rounded-[10px] border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 flex items-center gap-2 flex-wrap text-[11px]">
+    <div className="glass shrink-0 mb-2 rounded-[10px] px-3 py-2 flex items-center gap-2 flex-wrap text-[11px]">
       <span className="text-[var(--color-ink-faint)] uppercase tracking-[0.07em] shrink-0">
         Predicted fitness
       </span>
@@ -467,7 +464,7 @@ function DnaPredictionBanner({ prediction }: { prediction: DnaPredictedPayload }
 
 function CouncilStrip({ council }: { council: CouncilSummary }) {
   return (
-    <div className="shrink-0 border-t border-[var(--color-line)] px-3 py-2 text-[10px] flex items-center gap-2 flex-wrap">
+    <div className="glass shrink-0 border-t border-[var(--glass-border)] px-3 py-2 text-[10px] flex items-center gap-2 flex-wrap">
       <span className="text-[var(--color-ink-faint)] uppercase tracking-[0.07em]">Council</span>
       <Badge tone="info">chairman {council.chairman.split(':').pop()}</Badge>
       <Badge>winner {council.winner_label}</Badge>

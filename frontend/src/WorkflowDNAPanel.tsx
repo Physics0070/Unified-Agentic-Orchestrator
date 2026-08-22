@@ -58,7 +58,7 @@ export function WorkflowDNAPanel({ events, runId }: { events: LogEvent[]; runId:
           </div>
 
           {pred.mutation_suggestion && (
-            <div className="mt-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2.5">
+            <div className="neo-raised mt-3 rounded-lg px-3 py-2.5">
               <div className="flex items-center gap-2 mb-2">
                 <Badge tone="info">Mutation applied</Badge>
                 <span className="text-[12px] text-[var(--color-ink)] font-mono">

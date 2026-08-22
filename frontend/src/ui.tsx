@@ -7,9 +7,9 @@ export function Panel({ title, subtitle, right, children, className = '' }: {
 }) {
   return (
     <section
-      className={`flex flex-col min-h-0 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface-1)]/80 backdrop-blur-sm shadow-[0_1px_0_0_#ffffff08_inset,0_8px_28px_-12px_#000a] ${className}`}
+      className={`glass glass-sheen flex flex-col min-h-0 rounded-[var(--radius-panel)] shadow-[0_10px_34px_-14px_#000c] ${className}`}
     >
-      <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--color-line)] shrink-0">
+      <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--glass-border)] shrink-0">
         <div className="min-w-0">
           <h2 className="text-[12px] font-semibold tracking-[0.08em] uppercase text-[var(--color-ink-muted)]">
             {title}
@@ -27,11 +27,11 @@ export function Panel({ title, subtitle, right, children, className = '' }: {
 
 const BUTTON_VARIANTS = {
   default:
-    'bg-[var(--color-surface-3)] text-[var(--color-ink)] hover:bg-[var(--color-surface-4)] border border-[var(--color-line-strong)]',
+    'neo-raised neo-pressable text-[var(--color-ink)] hover:border-[var(--color-line-strong)]',
   primary:
-    'bg-[var(--color-accent)] text-[#032420] font-semibold hover:bg-[var(--color-accent-dim)] border border-transparent shadow-[0_2px_12px_-4px_var(--color-accent-deep)]',
+    'bg-[var(--color-accent)] text-[#032420] font-semibold hover:bg-[var(--color-accent-dim)] border border-transparent shadow-[0_2px_16px_-4px_var(--color-accent-deep),0_1px_0_0_#ffffff40_inset] active:shadow-[0_1px_6px_-2px_var(--color-accent-deep)] active:translate-y-px transition-shadow',
   danger:
-    'bg-[#f8717119] text-[var(--color-failed)] font-semibold hover:bg-[#f8717129] border border-[#f8717155]',
+    'glass text-[var(--color-failed)] font-semibold hover:bg-[#f8717114] border-[#f8717155]',
   ghost:
     'bg-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] border border-transparent',
 } as const
@@ -54,7 +54,7 @@ export function Button({
       disabled={disabled || loading}
       title={title}
       aria-busy={loading || undefined}
-      className={`inline-flex items-center gap-2 min-h-11 px-4 rounded-[10px] text-[13px] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98] ${BUTTON_VARIANTS[variant]}`}
+      className={`inline-flex items-center gap-2 min-h-11 px-4 rounded-[12px] text-[13px] cursor-pointer transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]}`}
     >
       {loading && <Spinner />}
       {children}
@@ -82,10 +82,7 @@ export function Stat({ label, value, tone = 'default', hint }: {
   label: string; value: ReactNode; tone?: keyof typeof STAT_TONES; hint?: string
 }) {
   return (
-    <div
-      className="rounded-[10px] border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2.5 transition-colors hover:border-[var(--color-line-strong)]"
-      title={hint}
-    >
+    <div className="neo-raised rounded-[12px] px-3 py-2.5 transition-colors hover:border-[var(--color-line-strong)]" title={hint}>
       <div className="text-[10px] uppercase tracking-[0.07em] text-[var(--color-ink-faint)]">
         {label}
       </div>
@@ -104,12 +101,12 @@ export function fitnessTone(score: number): 'good' | 'warn' | 'bad' {
 }
 
 const BADGE_TONES = {
-  default: 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]',
-  good: 'bg-[#34d3991f] text-[var(--color-done)]',
-  bad: 'bg-[#f871711f] text-[var(--color-failed)]',
-  warn: 'bg-[#fbbf241f] text-[var(--color-warn)]',
-  info: 'bg-[#60a5fa1f] text-[var(--color-running)]',
-  accent: 'bg-[#5eead41f] text-[var(--color-accent)]',
+  default: 'bg-[var(--color-surface-3)]/70 text-[var(--color-ink-muted)] border-[var(--glass-border)]',
+  good: 'bg-[#34d3991a] text-[var(--color-done)] border-[#34d39933]',
+  bad: 'bg-[#f8717119] text-[var(--color-failed)] border-[#f8717133]',
+  warn: 'bg-[#fbbf2419] text-[var(--color-warn)] border-[#fbbf2433]',
+  info: 'bg-[#60a5fa19] text-[var(--color-running)] border-[#60a5fa33]',
+  accent: 'bg-[#5eead419] text-[var(--color-accent)] border-[#5eead433]',
 } as const
 
 export function Badge({ children, tone = 'default', mono = true }: {
@@ -117,7 +114,7 @@ export function Badge({ children, tone = 'default', mono = true }: {
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap ${
+      className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap backdrop-blur-sm ${
         mono ? 'font-mono' : ''
       } ${BADGE_TONES[tone]}`}
     >
@@ -132,7 +129,14 @@ export function Empty({ icon, title, children }: {
   return (
     <div className="h-full grid place-items-center p-8">
       <div className="max-w-sm text-center">
-        {icon && <div className="text-2xl mb-3 opacity-40" aria-hidden>{icon}</div>}
+        {icon && (
+          <div
+            className="neo-raised inline-grid place-items-center h-11 w-11 rounded-full text-lg mb-3 text-[var(--color-ink-faint)]"
+            aria-hidden
+          >
+            {icon}
+          </div>
+        )}
         {title && (
           <p className="text-[14px] font-medium text-[var(--color-ink-muted)] mb-1.5">{title}</p>
         )}
@@ -157,7 +161,7 @@ export function StepRail({ current }: { current: number }) {
                 state === 'done'
                   ? 'text-[var(--color-done)] bg-[#34d39914]'
                   : state === 'active'
-                    ? 'text-[var(--color-accent)] bg-[#5eead418] font-semibold'
+                    ? 'text-[var(--color-accent)] bg-[#5eead418] font-semibold shadow-[inset_-2px_-2px_5px_var(--shadow-neo-light),inset_2px_2px_6px_var(--shadow-neo-dark)]'
                     : 'text-[var(--color-ink-faint)]'
               }`}
             >

@@ -34,10 +34,7 @@ function FindingsList({ findings }: { findings: Finding[] }) {
   return (
     <ul className="space-y-1.5">
       {findings.map((f, i) => (
-        <li
-          key={i}
-          className="rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-2)] px-2.5 py-2"
-        >
+        <li key={i} className="neo-raised rounded-lg px-2.5 py-2">
           <div className="flex items-start gap-2">
             {f.severity != null && <Badge tone={severityTone(f.severity)}>{String(f.severity)}</Badge>}
             <span className="text-[12px] text-[var(--color-ink)] leading-snug">
@@ -65,7 +62,7 @@ function FindingsList({ findings }: { findings: Finding[] }) {
 export function FinalOutput({ output }: { output: RunOutput }) {
   if (output.outputs.length === 0) {
     return (
-      <div className="shrink-0 border-t border-[var(--color-line)] px-3 py-2.5">
+      <div className="glass shrink-0 border-t border-[var(--glass-border)] px-3 py-2.5">
         <h3 className="text-[10px] uppercase tracking-[0.07em] text-[var(--color-ink-faint)] mb-1.5">
           Output
         </h3>
@@ -79,7 +76,7 @@ export function FinalOutput({ output }: { output: RunOutput }) {
   }
 
   return (
-    <div className="shrink-0 border-t border-[var(--color-line)] px-3 py-2.5 max-h-[280px] overflow-auto">
+    <div className="glass shrink-0 border-t border-[var(--glass-border)] px-3 py-2.5 max-h-[280px] overflow-auto">
       <h3 className="text-[10px] uppercase tracking-[0.07em] text-[var(--color-ink-faint)] mb-1.5">
         Output · the answer to the goal
       </h3>
@@ -95,7 +92,7 @@ export function FinalOutput({ output }: { output: RunOutput }) {
             {isFindingsShaped(o.content) ? (
               <FindingsList findings={o.content.findings} />
             ) : (
-              <pre className="text-[11px] text-[var(--color-ink-muted)] whitespace-pre-wrap break-words rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-2)] px-2.5 py-2">
+              <pre className="neo-inset text-[11px] text-[var(--color-ink-muted)] whitespace-pre-wrap break-words rounded-lg px-2.5 py-2">
                 {JSON.stringify(o.content, null, 2)}
               </pre>
             )}

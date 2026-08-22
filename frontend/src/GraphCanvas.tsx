@@ -38,12 +38,15 @@ function AcoNode({ data }: NodeProps<Data>) {
     <button
       onClick={() => onSelect(node.id)}
       aria-label={`${node.type} node ${node.id}, ${status}`}
-      className={`min-w-[168px] text-left rounded-lg border bg-[var(--color-surface-2)] px-3 py-2 transition-colors ${
+      className={`min-w-[168px] text-left cursor-pointer rounded-xl border bg-[var(--color-surface-2)] px-3 py-2 transition-all duration-150 ${
         status === 'running' ? 'is-running' : ''
       }`}
       style={{
         borderColor: selected ? 'var(--color-accent)' : color,
         borderWidth: selected ? 2 : 1,
+        boxShadow: selected
+          ? '0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent), -5px -5px 12px var(--shadow-neo-light), 6px 6px 14px var(--shadow-neo-dark)'
+          : '-5px -5px 12px var(--shadow-neo-light), 6px 6px 14px var(--shadow-neo-dark)',
       }}
     >
       <Handle type="target" position={Position.Top} />

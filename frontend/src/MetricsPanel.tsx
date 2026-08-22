@@ -90,11 +90,10 @@ export function MetricsPanel({ metrics, report }: {
       {/* The honest verdict, stated plainly rather than buried in a chart. */}
       {metrics.verdict && (
         <div
-          className="rounded-lg border px-3 py-2.5 text-[12px] leading-relaxed"
+          className="neo-raised rounded-lg px-3 py-2.5 text-[12px] leading-relaxed"
           style={{
             borderColor: metrics.duplicate_work || (metrics.least_valuable_agent &&
               migData.some((d) => d.mig < MIG_FLOOR)) ? 'var(--color-failed)' : 'var(--color-line)',
-            background: 'var(--color-surface-2)',
           }}
         >
           <div className="text-[10px] uppercase tracking-wider text-[var(--color-ink-faint)] mb-1">

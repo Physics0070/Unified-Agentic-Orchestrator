@@ -77,9 +77,9 @@ export function TraceViewer({ events, live }: { events: LogEvent[]; live: boolea
         {(['all', 'contract', 'security'] as const).map((f) => (
           <button
             key={f} onClick={() => setFilter(f)}
-            className={`min-h-8 px-2.5 rounded text-[11px] transition-colors ${
+            className={`min-h-8 px-2.5 rounded-md cursor-pointer transition-all duration-150 text-[11px] ${
               filter === f
-                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
+                ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)] shadow-[-2px_-2px_5px_var(--shadow-neo-light-strong),2px_2px_6px_var(--shadow-neo-dark)]'
                 : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink-muted)]'
             }`}
           >

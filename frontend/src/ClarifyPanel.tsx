@@ -43,13 +43,13 @@ export function ClarifyPanel({ clarification, onSubmit, busy }: {
               value={answers[q.text] ?? ''}
               onChange={(e) => setAnswers({ ...answers, [q.text]: e.target.value })}
               placeholder="Answering helps tailor the plan"
-              className="w-full min-h-11 px-3 rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-line)] text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none"
+              className="neo-inset w-full min-h-11 px-3 rounded-lg text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none"
             />
           </div>
         ))}
       </div>
 
-      <div className="rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-2)] p-3">
+      <div className="neo-raised rounded-lg p-3">
         <div className="text-[10px] uppercase tracking-wider text-[var(--color-ink-faint)] mb-1.5">
           Permission requested
         </div>
