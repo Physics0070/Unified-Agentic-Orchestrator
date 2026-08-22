@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   api, streamEvents,
   type CouncilSummary, type GraphSpec, type LogEvent,
@@ -7,10 +7,20 @@ import {
 import { ChatPanel } from './ChatPanel'
 import { ClarifyPanel, type Clarification } from './ClarifyPanel'
 import { GraphCanvas, StatusLegend, type NodeStatus } from './GraphCanvas'
-import { MetricsPanel } from './MetricsPanel'
-import { TraceViewer } from './TraceViewer'
-import { WorkflowDNAPanel } from './WorkflowDNAPanel'
 import { Badge, Button, Empty, Panel, SkeletonRows, StepRail } from './ui'
+
+// recharts (MetricsPanel) and the trace/DNA panels are only reachable from
+// the orchestrator tab, never the default chat view, so they're lazy-loaded
+// out of the main bundle. GraphCanvas is deliberately NOT here: ChatPanel's
+// WorkflowPanel renders it too (chat's own routing graph), so it is already
+// on the default path and Vite won't split a module that's also imported
+// statically elsewhere - lazy-loading it here would just add a Suspense
+// boundary for no bundle-size benefit.
+const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
+const TraceViewer = lazy(() => import('./TraceViewer').then((m) => ({ default: m.TraceViewer })))
+const WorkflowDNAPanel = lazy(() =>
+  import('./WorkflowDNAPanel').then((m) => ({ default: m.WorkflowDNAPanel })),
+)
 
 const DEMO_GOAL = 'Audit this repository and produce a prioritized remediation report.'
 
@@ -271,6 +281,7 @@ export default function App() {
 
       {/* ------------------------------------------------------------- main */}
       {mode === 'orchestrator' && (
+      <Suspense fallback={<main className="flex-1 min-h-0 p-3"><SkeletonRows n={8} /></main>}>
       <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-3 p-3">
         <Panel
           title={clarification ? 'Clarify & approve' : 'Agent graph'}
@@ -351,6 +362,7 @@ export default function App() {
           )}
         </Panel>
       </main>
+      </Suspense>
       )}
     </div>
   )
