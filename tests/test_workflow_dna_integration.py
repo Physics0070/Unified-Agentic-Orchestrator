@@ -20,14 +20,37 @@ file is actually responsible for translating across.
 """
 
 
+import pytest
+
 from backend.engine import AgentSpec, Edge, GraphSpec, Node
 from backend.engine.executor import NodeResult, RunResult
 from backend.events.types import EventType
+from backend.workflow_dna import orchestrator_hooks as hooks
+from backend.workflow_dna.history.repository import WorkflowHistoryRepository
 from backend.workflow_dna.orchestrator_hooks import (
     _dna_from_graph,
     predict_and_log,
     record_and_log,
 )
+from backend.workflow_dna.service import WorkflowDNAService
+
+
+@pytest.fixture
+def isolated_service(tmp_path, monkeypatch):
+    """Points the module-level service singleton at a throwaway SQLite file.
+
+    Without this, `predict_and_log`/`record_and_log` fall through to
+    `WorkflowHistoryRepository`'s default path, which is the real, tracked
+    `workflow_dna_history.db` used for the actual fitness model - every test
+    run would write `wf_test_*` rows into it and leave a spurious diff behind.
+    Prediction still runs against the real trained model; only the history
+    write target changes.
+    """
+    service = WorkflowDNAService(
+        repository=WorkflowHistoryRepository(db_path=str(tmp_path / "history.db"))
+    )
+    monkeypatch.setattr(hooks, "_get_service", lambda: service)
+    return service
 
 
 class FakeEventStore:
@@ -96,7 +119,7 @@ def test_dna_from_graph_sequential_has_no_parallelism():
     assert dna.parallel_execution == 0
 
 
-async def test_predict_and_log_appends_dna_predicted_event():
+async def test_predict_and_log_appends_dna_predicted_event(isolated_service):
     graph = GraphSpec(nodes=[_agent_node("a")], edges=[]).finalize()
     store = FakeEventStore()
 
@@ -110,7 +133,7 @@ async def test_predict_and_log_appends_dna_predicted_event():
     assert "predicted_fitness" in payload
 
 
-async def test_record_and_log_appends_dna_recorded_event():
+async def test_record_and_log_appends_dna_recorded_event(isolated_service):
     graph = GraphSpec(nodes=[_agent_node("a")], edges=[]).finalize()
     store = FakeEventStore()
     store.cost_usd = 0.05
