@@ -182,6 +182,93 @@ export interface ModelProfile {
   agentic_capability: number; factuality_safety: number; real_world_data: number
 }
 
+// ------------------------------------------------------------------ providers / knowledge / router / trace
+
+export type Priority = 'balanced' | 'quality' | 'speed' | 'cost'
+
+export interface ProviderStatus {
+  provider: string; label: string; configured: boolean
+  key_source: 'runtime' | 'env' | null
+  base_url: string | null; key_required: boolean
+  models: string[]; default_models: string[]; suggested_models: string[]; active_specs: string[]
+}
+
+export interface KnowledgeDoc { doc_id: string; name: string; chars: number; chunks: number; added_at: string }
+
+export interface KnowledgeSummary {
+  workspace_id: string; documents: KnowledgeDoc[]; chunks: number; persistent: boolean
+  semantic_backend: 'embeddings' | 'char-ngram-tfidf'; supported: string[]; max_bytes: number
+}
+
+export interface KnowledgeHit {
+  doc_id: string; doc_name: string; ordinal: number; text: string; score: number
+  scores: { bm25: number | null; semantic: number | null; fused: number; rerank: number | null }
+  ranks: { bm25: number | null; semantic: number | null }
+}
+
+export interface KnowledgeQueryResult {
+  query: string; mode: string; reranked: boolean; semantic_backend: string | null
+  documents: number; chunks: number; hits: KnowledgeHit[]
+}
+
+export interface RouteDecision {
+  model: string; reason: string; priority: Priority | string; complexity: string; intent: string
+  weights: { capability: number; cost: number; latency: number }
+  candidates: {
+    model: string; capability: number; cost: number; latency: number; score: number
+    cost_per_mtok_usd: number; typical_latency_ms: number; estimated: boolean
+  }[]
+}
+
+export interface TraceStep {
+  node_id: string; agent_id: string | null; type: string | null; role: string | null
+  model: string | null
+  status: 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'skipped'
+  error: string | null; started_at: string | null; ended_at: string | null
+  duration_ms: number | null; depends_on: string[]; tools_declared: string[]
+  tool_calls: { tool: string | null; arguments: string | null }[]
+  tools_blocked: (string | null)[]
+  input: string | null; output: string | null
+  tokens_in: number; tokens_out: number; tokens: number; cost_usd: number
+  attempts: number; repairs: number; retries: number; used_fallback: boolean
+}
+
+export interface RunTrace {
+  run_id: string; status: string; steps: TraceStep[]
+  summary: {
+    steps: number; by_status: Record<string, number>; tokens: number
+    cost_usd: number; wall_clock_ms: number | null; finished: boolean
+  }
+}
+
+const WS_KEY = 'aco.workspace'
+let wsFallback = ''
+/** Random per-browser id scoping uploaded knowledge; localStorage when available. */
+export function getWorkspaceId(): string {
+  try {
+    let id = localStorage.getItem(WS_KEY)
+    if (!id) { id = crypto.randomUUID().replace(/-/g, ''); localStorage.setItem(WS_KEY, id) }
+    return id
+  } catch {
+    return wsFallback ||= crypto.randomUUID().replace(/-/g, '')
+  }
+}
+
+const adminHeaders = (t?: string): Record<string, string> => (t ? { 'X-Admin-Token': t } : {})
+
+async function upload(file: File): Promise<KnowledgeSummary & { document: KnowledgeDoc }> {
+  const fd = new FormData()
+  fd.append('workspace_id', getWorkspaceId())
+  fd.append('file', file)
+  const r = await fetch(url('/api/knowledge/upload'), { method: 'POST', body: fd })
+  if (!r.ok) {
+    let detail = `${r.status}`
+    try { detail = (await r.json()).detail ?? detail } catch { /* non-JSON error body */ }
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  return r.json()
+}
+
 export const api = {
   models: () => req<{ models: string[]; providers: string[] }>('/api/models'),
 
@@ -228,6 +315,38 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ goal, models, depths: [1, 2, 3, 4] }) }),
   workflowDnaHistory: (limit = 20) =>
     req<{ executions: WorkflowDnaExecution[] }>(`/api/workflow-dna/history?limit=${limit}`),
+
+  providers: () => req<{ providers: ProviderStatus[]; admin_required: boolean }>('/api/providers'),
+  saveProvider: (
+    p: string, body: { api_key?: string; base_url?: string; models?: string[] }, adminToken?: string,
+  ) => req<{ providers: ProviderStatus[] }>(`/api/providers/${p}`,
+    { method: 'PUT', body: JSON.stringify(body), headers: adminHeaders(adminToken) }),
+  removeProvider: (p: string, adminToken?: string) =>
+    req<{ providers: ProviderStatus[] }>(`/api/providers/${p}`,
+      { method: 'DELETE', headers: adminHeaders(adminToken) }),
+  testProvider: (p: string, model?: string) =>
+    req<{ ok: boolean; provider: string; model?: string; latency_ms?: number; tokens?: number; error?: string }>(
+      `/api/providers/${p}/test`, { method: 'POST', body: JSON.stringify({ model }) }),
+
+  knowledgeDocs: () =>
+    req<KnowledgeSummary>(`/api/knowledge/documents?workspace_id=${getWorkspaceId()}`),
+  uploadDocument: upload,
+  deleteDocument: (docId: string) =>
+    req<KnowledgeSummary>(`/api/knowledge/documents/${docId}?workspace_id=${getWorkspaceId()}`,
+      { method: 'DELETE' }),
+  knowledgeQuery: (
+    query: string,
+    opts: { top_k?: number; mode?: 'hybrid' | 'keyword' | 'semantic'; rerank?: boolean } = {},
+  ) => req<KnowledgeQueryResult>('/api/knowledge/query',
+    { method: 'POST', body: JSON.stringify({ workspace_id: getWorkspaceId(), query, ...opts }) }),
+
+  explainRoute: (message: string, priority?: Priority, models?: string[]) =>
+    req<{
+      plan: { intent: string; complexity: string; rationale: string; source: string }
+      decision: RouteDecision
+    }>('/api/router/explain', { method: 'POST', body: JSON.stringify({ message, priority, models }) }),
+
+  trace: (runId: string) => req<RunTrace>(`/api/runs/${runId}/trace`),
 }
 
 // ------------------------------------------------------------------ chat
@@ -249,6 +368,7 @@ export interface PlanInfo {
   // Nodes/edges only for a chat turn's graph - no config_hash/locked meaning
   // applies (never approved, never re-run in place, unlike an Orchestrator run).
   graph: { nodes: GraphNode[]; edges: GraphEdge[] }
+  routing?: RouteDecision
 }
 
 export interface SpecialistInfo {
@@ -283,6 +403,12 @@ export interface Benchmarks {
     overlapping_pairs: { a: string; b: string; similarity: number }[]
   }
   web_search: { used: boolean; sources: { title: string; url: string }[] }
+  routing?: RouteDecision
+  knowledge?: {
+    used: boolean; semantic_backend: string | null
+    hits: { doc_name: string; ordinal: number; score: number }[]
+  }
+  trace?: TraceStep[]
 }
 
 export interface ChatFile {
@@ -313,11 +439,12 @@ export function streamChat(
   body: {
     message: string; history: ChatMessage[]; models?: string[]
     forcedModel?: string; forceWebSearch?: boolean
+    priority?: string; workspaceId?: string; useKnowledge?: boolean
   },
   h: ChatHandlers,
 ): () => void {
   const ctrl = new AbortController()
-  const { forcedModel, forceWebSearch, ...rest } = body
+  const { forcedModel, forceWebSearch, priority, workspaceId, useKnowledge, ...rest } = body
 
   ;(async () => {
     try {
@@ -326,6 +453,7 @@ export function streamChat(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...rest, forced_model: forcedModel, force_web_search: !!forceWebSearch,
+          priority, workspace_id: workspaceId, use_knowledge: useKnowledge,
         }),
         signal: ctrl.signal,
       })

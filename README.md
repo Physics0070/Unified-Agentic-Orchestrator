@@ -51,6 +51,44 @@ and the system names it out loud.
 
 ---
 
+## Workspace features
+
+**Multi-provider management** (`providers` tab). Ollama, Groq, Gemini, OpenAI
+and OpenRouter each have a card: paste a key, pick models, test the connection,
+disconnect. A key set here lives in process memory only - never in a log, an
+event row or a response - and an `ADMIN_TOKEN` (or `SECRET_KEY`) guards the
+write endpoints. Environment variables remain the durable path.
+
+**Knowledge workspace** (`knowledge` tab). Upload PDF, DOCX, PPTX, XLSX, TXT, MD,
+CSV and common code/text formats. Files are validated by magic bytes, chunked on
+paragraph boundaries and indexed in memory per workspace (not persisted - the
+UI says so). Retrieval is **hybrid**: BM25 keyword search and a semantic leg
+(sentence embeddings when `requirements-embeddings.txt` is installed, otherwise
+character n-gram TF-IDF - the API reports which one ran), merged with
+Reciprocal Rank Fusion, reranked by idf-weighted query coverage and adjacent-
+term matches, then de-duplicated. Chat turns retrieve automatically from your
+documents and cite them; every score is visible under "Test retrieval".
+
+**Model router.** Each question is scored per candidate on capability (the
+catalog's fit for the intent), cost and latency, weighted by how hard the
+question is and a `priority` (balanced / quality / speed / cost). "hi" no longer
+buys the strongest, slowest model; a deep audit does. The decision, with every
+candidate's components, is returned with each answer. The capability, cost and
+latency numbers are curated estimates (`backend/providers/catalog.py`), not live
+measurements.
+
+**Dynamic orchestration.** The council designs the workflow from the goal:
+branches may declare `depends_on`, so a build goal becomes a pipeline
+(plan -> implement -> review) while a comparison fans out in parallel. Cycles
+and unknown dependencies in model output are repaired in code. The fixed
+security/quality/docs team is now used only for code audits.
+
+**Execution trace.** Every agent's input, output, tools declared / called /
+blocked, duration, tokens, cost and status - in the orchestrator's `agents`
+tab (`GET /api/runs/{id}/trace`) and under each chat answer.
+
+---
+
 ## Architecture in one paragraph
 
 One append-only Postgres table is the single source of truth. Observability,
@@ -181,6 +219,10 @@ with `ollama list`. Not required otherwise - it is not on the default path.
 | `OLLAMA_API_KEY` | Cloud only | — | Required for Ollama Cloud; must be absent for an unauthenticated local instance |
 | `OLLAMA_MODELS` | no | `llama3.2:3b,qwen2.5:7b` | Comma-separated tags, no `ollama:` prefix - local and `:cloud` tags are interchangeable |
 | `GROQ_API_KEY` | no | — | Additive - widens the council with a different model family when set |
+| `OPENAI_API_KEY` | no | — | Additive - OpenAI models join the council and the router |
+| `GROQ_MODELS` / `GEMINI_MODELS` / `OPENAI_MODELS` / `OPENROUTER_MODELS` | no | one sensible model each (OpenRouter: none) | Comma-separated tags per provider - switching models is configuration, not code |
+| `ADMIN_TOKEN` | prod only | falls back to `SECRET_KEY` | Guards setting/clearing a provider key at runtime; refused in prod when neither is set |
+| `KNOWLEDGE_MAX_DOCS` / `KNOWLEDGE_MAX_CHUNKS` | no | `50` / `5000` | Per-workspace limits for uploaded documents |
 | `GEMINI_API_KEY` | no | — | Additive - widens the council with a different model family when set |
 | `OPENROUTER_API_KEY` | no | — | Not part of the default mix; reachable only by explicitly passing an `openrouter:model` spec in a request |
 | `MAX_CONCURRENT_MODEL_CALLS` | no | `4` | Caps simultaneous in-flight model calls across the council |

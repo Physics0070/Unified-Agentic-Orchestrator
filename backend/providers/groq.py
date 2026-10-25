@@ -1,4 +1,8 @@
-"""Groq adapter - OpenAI-compatible chat completions."""
+"""Groq adapter - OpenAI-compatible chat completions.
+
+Also the base for any other OpenAI-compatible provider (see openai.py): every
+provider-specific string below goes through `self.provider` / `self.RATES`.
+"""
 
 import json
 import time
@@ -16,9 +20,10 @@ RATES = {
 
 class GroqAdapter(ProviderAdapter):
     provider = "groq"
+    RATES = RATES
 
     def _cost(self, model: str, tin: int, tout: int) -> float:
-        rate = RATES.get(model)
+        rate = self.RATES.get(model)
         if not rate:
             return 0.0
         return round((tin * rate[0] + tout * rate[1]) / 1_000_000, 8)
@@ -35,7 +40,7 @@ class GroqAdapter(ProviderAdapter):
         json_mode: bool = False,
     ) -> Completion:
         if not self.handle.configured:
-            raise ProviderError("groq is not configured (no key)")
+            raise ProviderError(f"{self.provider} is not configured (no key)")
 
         body: dict = {"model": model, "messages": messages, "temperature": temperature}
         if seed is not None:
@@ -73,7 +78,7 @@ class GroqAdapter(ProviderAdapter):
                 tokens_out=tout,
                 cost_usd=self._cost(model, tin, tout),
                 latency_ms=elapsed,
-                model=f"groq:{model}",
+                model=f"{self.provider}:{model}",
                 tool_calls=calls,
             )
 
