@@ -61,6 +61,30 @@ CATALOG: dict[str, ModelProfile] = {
         reasoning_logic=0.65, task_proficiency=0.70, context_relation=0.80,
         agentic_capability=0.55, factuality_safety=0.70, real_world_data=0.80,
     ),
+    "gpt-4o-mini": ModelProfile(
+        reasoning_logic=0.72, task_proficiency=0.78, context_relation=0.75,
+        agentic_capability=0.72, factuality_safety=0.70, real_world_data=0.50,
+    ),
+    "gpt-4o": ModelProfile(
+        reasoning_logic=0.85, task_proficiency=0.88, context_relation=0.82,
+        agentic_capability=0.82, factuality_safety=0.78, real_world_data=0.55,
+    ),
+    "gpt-4.1-mini": ModelProfile(
+        reasoning_logic=0.78, task_proficiency=0.82, context_relation=0.85,
+        agentic_capability=0.78, factuality_safety=0.74, real_world_data=0.50,
+    ),
+    "gpt-4.1": ModelProfile(
+        reasoning_logic=0.88, task_proficiency=0.90, context_relation=0.88,
+        agentic_capability=0.85, factuality_safety=0.80, real_world_data=0.55,
+    ),
+    "gemini-2.5-flash": ModelProfile(
+        reasoning_logic=0.80, task_proficiency=0.78, context_relation=0.88,
+        agentic_capability=0.68, factuality_safety=0.74, real_world_data=0.82,
+    ),
+    "llama-3.1-8b": ModelProfile(
+        reasoning_logic=0.50, task_proficiency=0.58, context_relation=0.55,
+        agentic_capability=0.42, factuality_safety=0.50, real_world_data=0.30,
+    ),
     "qwen2.5:7b": ModelProfile(
         reasoning_logic=0.60, task_proficiency=0.65, context_relation=0.60,
         agentic_capability=0.50, factuality_safety=0.55, real_world_data=0.35,
@@ -157,3 +181,52 @@ def pick_model(models: list[str], intent: str) -> tuple[str, str]:
     """Best single pick, (model, reason). Raises IndexError on an empty list -
     callers already guard against no models being configured upstream."""
     return rank_models(models, intent)[0]
+
+
+# ---------------------------------------------------------------- economics
+#
+# Cost and speed, the two things the capability axes above do not say. Like the
+# capability scores these are curated estimates, not live measurements: a
+# blended USD per 1M tokens (published list price, input and output averaged
+# 1:1), and a typical time-to-useful-answer in milliseconds for a short
+# prompt. Ollama is 0 USD because the free tier / local inference has no
+# marginal price - which is a real property of this deployment, not a guess.
+# Latency is what actually separates them: a 3B model on a memory-capped
+# container is slow, a hosted 8B is fast.
+
+
+class ModelEconomics(BaseModel):
+    cost_per_mtok_usd: float
+    typical_latency_ms: int
+
+
+ECONOMICS: dict[str, ModelEconomics] = {
+    "gpt-oss:120b-cloud": ModelEconomics(cost_per_mtok_usd=0.0, typical_latency_ms=3500),
+    "llama-3.3-70b": ModelEconomics(cost_per_mtok_usd=0.69, typical_latency_ms=900),
+    "llama-3.1-8b": ModelEconomics(cost_per_mtok_usd=0.065, typical_latency_ms=450),
+    "gemini-2.0-flash": ModelEconomics(cost_per_mtok_usd=0.25, typical_latency_ms=1100),
+    "gemini-2.5-flash": ModelEconomics(cost_per_mtok_usd=1.40, typical_latency_ms=1500),
+    "gpt-4o-mini": ModelEconomics(cost_per_mtok_usd=0.375, typical_latency_ms=1000),
+    "gpt-4o": ModelEconomics(cost_per_mtok_usd=6.25, typical_latency_ms=1800),
+    "gpt-4.1-mini": ModelEconomics(cost_per_mtok_usd=1.0, typical_latency_ms=1100),
+    "gpt-4.1": ModelEconomics(cost_per_mtok_usd=5.0, typical_latency_ms=1900),
+    "qwen2.5:7b": ModelEconomics(cost_per_mtok_usd=0.0, typical_latency_ms=6000),
+    "llama3.2:3b": ModelEconomics(cost_per_mtok_usd=0.0, typical_latency_ms=4000),
+}
+
+# A model the table does not know is treated as middling on both, and labelled
+# as such by the router - the same stance DEFAULT_PROFILE takes for capability.
+DEFAULT_ECONOMICS = ModelEconomics(cost_per_mtok_usd=1.0, typical_latency_ms=2000)
+
+
+def economics_for(model_spec: str) -> tuple[ModelEconomics, str]:
+    """Returns (economics, matched_key); matched_key is "default" on a miss."""
+    try:
+        _, model = parse_model(model_spec)
+    except ValueError:
+        return DEFAULT_ECONOMICS, "default"
+    matches = [k for k in ECONOMICS if k in model]
+    if not matches:
+        return DEFAULT_ECONOMICS, "default"
+    key = max(matches, key=len)
+    return ECONOMICS[key], key

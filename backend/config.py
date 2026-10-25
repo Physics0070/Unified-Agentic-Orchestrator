@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     # Blank in dev on purpose - see _require_secrets_in_prod.
     frontend_origin: str = ""
     max_upload_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
+    # Guards the provider-management write endpoints (setting/clearing a key at
+    # runtime). Falls back to SECRET_KEY; when both are blank the endpoints are
+    # open in dev and refused in prod.
+    admin_token: str = ""
+
+    # ---------- knowledge workspace (RAG) ----------
+    knowledge_max_docs: int = Field(default=50, gt=0)
+    knowledge_max_chunks: int = Field(default=5000, gt=0)
 
     # ---------- LLM provider ----------
     # Which provider backend.providers._default_models() builds specs for.
@@ -60,6 +68,14 @@ class Settings(BaseSettings):
     # local/dev instance, "qwen3-coder:480b-cloud" for Ollama Cloud - a local
     # tag and a :cloud tag are interchangeable here, no code change needed).
     ollama_models: str = "llama3.2:3b,qwen2.5:7b"
+    # Per-provider model lists (comma-separated tags, no "provider:" prefix).
+    # Configuration rather than code, so switching a provider's models never
+    # needs an edit to routes.py. OpenRouter is empty by default: its free tier
+    # is unreliable enough that it only joins the mix when asked for.
+    groq_models: str = "llama-3.3-70b-versatile"
+    gemini_models: str = "gemini-2.0-flash"
+    openai_models: str = "gpt-4o-mini"
+    openrouter_models: str = ""
     # Cap on simultaneous in-flight model calls across the whole council, so a
     # wide fanout cannot blow through the provider's rate limit at once.
     max_concurrent_model_calls: int = Field(default=4, gt=0)

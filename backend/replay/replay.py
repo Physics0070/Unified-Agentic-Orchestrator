@@ -135,7 +135,7 @@ async def replay_run(store: EventStore, original_run_id: str) -> tuple[RunResult
 
     result = await Executor(
         store, graph, replay_id, seed=original.seed,
-        completer=completer, approvals=approvals,
+        completer=completer, approvals=approvals, goal=original.goal,
     ).run()
 
     diff = await build_diff(store, original_run_id, replay_id)

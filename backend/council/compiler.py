@@ -22,12 +22,16 @@ log = logging.getLogger("aco.compiler")
 PLAN_SCHEMA_HINT = """Return JSON of this exact shape:
 {
   "branches": [
-    {"id":"security","role":"what this specialist examines","tools":["read_file"]},
-    {"id":"quality","role":"...","tools":["read_file"]}
+    {"id":"research","role":"what this stage does","tools":["read_file"]},
+    {"id":"draft","role":"...","tools":["read_file"],"depends_on":["research"]},
+    {"id":"review","role":"...","tools":[],"depends_on":["draft"]}
   ]
 }
-Rules: 2 to 4 branches. Each id is lowercase, one word, unique. Branches must be
-independent of each other so they can run in parallel. tools may only contain
+Rules: 2 to 5 branches. Each id is lowercase, one word, unique. Shape the plan to
+the goal. Independent aspects have no depends_on and run in parallel. When a stage
+needs another stage's result (research -> draft -> review), list that stage's id in
+depends_on; it then runs after it and receives the upstream output. depends_on may
+only name other branch ids and must not form a cycle. tools may only contain
 "read_file" and "list_files"."""
 
 FINDINGS_SCHEMA = {
@@ -128,13 +132,17 @@ ALLOWED_TOOLS = {"read_file", "list_files"}
 
 def _branch_agent(
     bid: str, role: str, tools: list[str], model: str, schema: dict,
-    web_context: str = "",
+    web_context: str = "", after: list[str] | None = None,
 ) -> AgentSpec:
+    upstream = (
+        f"You receive the outputs of upstream stages ({', '.join(after)}); build on them.\n"
+        if after else ""
+    )
     return AgentSpec(
         id=bid,
         role=role,
         system_contract=(
-            f"You are the {bid} specialist. {role}\n"
+            f"You are the {bid} specialist. {role}\n" + upstream +
             "Report only what you can support from the material given to you. "
             "Output JSON only, matching the required schema. No prose, no markdown fence."
             + web_context
@@ -147,6 +155,66 @@ def _branch_agent(
     )
 
 
+def _fallback_branches(intent: str) -> list[dict]:
+    """Deterministic, intent-shaped plan used when the council gave no usable one.
+    Only audits get security/quality/docs; a build is a pipeline."""
+    def b(bid: str, role: str, *deps: str) -> dict:
+        return {"id": bid, "role": role, "tools": ["read_file"], "depends_on": list(deps)}
+
+    if intent == "audit":
+        return [b("security", "Find security weaknesses."),
+                b("quality", "Find code quality and maintainability issues."),
+                b("docs", "Find documentation gaps.")]
+    if intent == "build":
+        return [b("plan", "Break the goal into concrete requirements and steps."),
+                b("implement", "Produce the deliverable following the plan.", "plan"),
+                b("review", "Check the deliverable against the plan and fix gaps.", "implement")]
+    if intent == "compare":
+        return [b("strengths", "Cover what each option does well."),
+                b("weaknesses", "Cover where each option falls short."),
+                b("tradeoffs", "Cover which option fits which situation.")]
+    if intent in ("explain", "chat"):
+        return [b("core", "Explain the core idea clearly."),
+                b("context", "Give background, examples and common pitfalls.")]
+    return [b("facts", "Establish the relevant facts and data."),
+            b("drivers", "Identify the causes and drivers behind them."),
+            b("implications", "Draw out the implications and recommendations.")]
+
+
+def _sanitize(branches: list[dict], limit: int) -> list[dict]:
+    """Clean untrusted branches: unique identifier ids, capped at `limit`, and
+    depends_on reduced to known, non-self deps with cycles broken by dropping the
+    back edge (branches are processed in order, so the result is deterministic)."""
+    seen: set[str] = set()
+    clean: list[dict] = []
+    for b in branches:
+        bid = str(b.get("id", "")).strip().lower().replace(" ", "_")
+        if not bid or bid in seen or not bid.isidentifier():
+            continue
+        seen.add(bid)
+        raw = b.get("depends_on")
+        clean.append({
+            "id": bid,
+            "role": str(b.get("role") or f"Examine the {bid} aspects of the repository."),
+            "tools": list(b.get("tools") or ["read_file"]),
+            "depends_on": [str(d).strip().lower().replace(" ", "_") for d in raw]
+            if isinstance(raw, list) else [],
+        })
+    clean = clean[:limit]
+    ids = {b["id"] for b in clean}
+    deps: dict[str, list[str]] = {b["id"]: [] for b in clean}
+
+    def reaches(src: str, target: str) -> bool:  # does src depend (transitively) on target?
+        return src == target or any(reaches(d, target) for d in deps[src])
+
+    for b in clean:
+        for d in b["depends_on"]:
+            if d in ids and d not in deps[b["id"]] and not reaches(d, b["id"]):
+                deps[b["id"]].append(d)
+        b["depends_on"] = deps[b["id"]]
+    return clean
+
+
 def build_graph(
     branches: list[dict],
     models: list[str],
@@ -156,7 +224,7 @@ def build_graph(
     intent: str = "audit",
     web_context: str = "",
 ) -> GraphSpec:
-    """Assemble the canonical shape: fanout -> N parallel analysts -> verify -> report.
+    """Assemble fanout -> agents (parallel, or chained via depends_on) -> join -> verify.
 
     The verify node and at least one parallel branch are invariants, not
     suggestions - PS requirement 64 names both. So when the council returns
@@ -168,29 +236,15 @@ def build_graph(
     those to three branches would make the depth sweep compare a graph against
     itself.
     """
-    seen: set[str] = set()
-    clean: list[dict] = []
-    for b in branches:
-        bid = str(b.get("id", "")).strip().lower().replace(" ", "_")
-        if not bid or bid in seen or not bid.isidentifier():
-            continue
-        seen.add(bid)
-        clean.append({
-            "id": bid,
-            "role": str(b.get("role") or f"Examine the {bid} aspects of the repository."),
-            "tools": list(b.get("tools") or ["read_file"]),
-        })
+    # Up to 5 agents when the plan has dependencies (a pipeline needs room), else 4.
+    limit = 5 if any(b.get("depends_on") for b in branches) else 4
+    clean = _sanitize(branches, limit)
     if len(clean) < 2 and not allow_degenerate:
-        # The council failed to give us a parallel plan. Fall back to the shape
-        # the PS requires rather than emitting a single-branch graph.
-        log.warning("council returned %d usable branches, using default set", len(clean))
-        clean = [
-            {"id": "security", "role": "Find security weaknesses.", "tools": ["read_file"]},
-            {"id": "quality", "role": "Find code quality and maintainability issues.",
-             "tools": ["read_file"]},
-            {"id": "docs", "role": "Find documentation gaps.", "tools": ["read_file"]},
-        ]
-    clean = clean[:4]
+        # The council failed to give us a usable plan. Fall back to a shape
+        # derived from the intent rather than emitting a single-branch graph.
+        log.warning("council returned %d usable branches, using %s default set",
+                    len(clean), intent)
+        clean = _sanitize(_fallback_branches(intent), limit)
 
     nodes = [
         Node(id="clarify", type="clarify"),
@@ -212,12 +266,18 @@ def build_graph(
     for i, b in enumerate(clean):
         model = ranked[i % len(ranked)][0]
         nodes.append(Node(id=b["id"], type="agent", agent=_branch_agent(
-            b["id"], b["role"], b["tools"], model, findings_schema, web_context),
+            b["id"], b["role"], b["tools"], model, findings_schema, web_context,
+            b["depends_on"]),
             max_retries=1))
-        edges.append(Edge(from_node="fanout", to_node=b["id"], handoff_schema=findings_schema))
+        # No deps: hang off fanout. Deps: receive each upstream agent's output.
+        for src in b["depends_on"] or ["fanout"]:
+            edges.append(Edge(from_node=src, to_node=b["id"], handoff_schema=findings_schema))
 
     nodes.append(Node(id="join", type="join"))
+    needed = {d for b in clean for d in b["depends_on"]}
     for b in clean:
+        if b["id"] in needed:
+            continue
         edges.append(Edge(from_node=b["id"], to_node="join", handoff_schema=findings_schema))
 
     verifier_contract = (
@@ -277,7 +337,8 @@ async def compile_graph(
 
     council_task = (
         f"Design a team of independent specialist agents for this goal:\n\n{task}\n\n"
-        "Each specialist must be able to work in parallel without waiting for the others."
+        "Independent specialists run in parallel; if a stage needs another's output "
+        "(e.g. research -> draft -> review), express that with depends_on."
     )
     verdict = None
     branches: list[dict] = []
@@ -317,6 +378,12 @@ async def compile_graph(
         branches, members, verifier_model=members[-1],
         intent=resolved_intent, web_context=web_context,
     )
+    agent_ids = {n.id for n in graph.nodes if n.type == "agent"}
+    agent_levels = [
+        lv for lv in ([a for a in lvl if a in agent_ids] for lvl in graph.levels()) if lv
+    ]
+    shape = ("parallel" if len(agent_levels) <= 1
+             else "pipeline" if all(len(lv) == 1 for lv in agent_levels) else "mixed")
 
     if store and run_id:
         await store.append(
@@ -328,25 +395,33 @@ async def compile_graph(
                 "branches": [n.id for n in graph.nodes if n.type == "agent"],
                 "council_used": verdict is not None,
                 "intent": resolved_intent,
+                "shape": shape,
                 "web_search_used": bool(web_context),
             },
         )
     return graph, verdict
 
 
-def clarifying_questions(goal: str) -> list[str]:
+def clarifying_questions(goal: str, intent: str | None = None) -> list[str]:
     """Up to 3 questions, then an explicit permission request.
 
     Deterministic rather than model-generated: the demo must ask the same
     questions every time, and these are the axes that actually change the graph.
+    Audit (and the legacy no-intent call) keeps the audit questions.
     """
+    if intent in (None, "audit"):
+        return [
+            "Which areas should the audit prioritise - security, code quality, "
+            "documentation, or tests?",
+            "Should findings be limited to what is provable from the code, or may they "
+            "include advisory suggestions?",
+            "What severity floor should appear in the final report?",
+        ][:3]
     return [
-        "Which areas should the audit prioritise - security, code quality, "
-        "documentation, or tests?",
-        "Should findings be limited to what is provable from the code, or may they "
-        "include advisory suggestions?",
-        "What severity floor should appear in the final report?",
-    ][:3]
+        "What scope should this cover, and is anything explicitly out of scope?",
+        "Who is the audience, and how much background do they already have?",
+        "What format should the result take - short summary, detailed report, or steps?",
+    ]
 
 
 def permission_prompt(branches: list[str]) -> str:

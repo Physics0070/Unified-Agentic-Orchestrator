@@ -8,11 +8,12 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  API_BASE,
+  api, API_BASE, getWorkspaceId,
   type Benchmarks, type ChatFile, type ChatMessage, type PlanInfo, type SpecialistInfo,
   streamChat,
 } from './api'
 import { GraphCanvas, type NodeStatus } from './GraphCanvas'
+import { ExecutionTrace } from './TracePanel'
 import { Badge, Button, Empty, Spinner } from './ui'
 
 interface Turn {
@@ -294,6 +295,59 @@ function BenchDrawer({ turn, onClose }: { turn: Turn; onClose: () => void }) {
           )}
         </section>
 
+        {b.routing && (
+          <section className="drawer-sec">
+            <h4>Priority routing</h4>
+            <div className="kv"><span>Chosen</span><b>{b.routing.model}</b></div>
+            <div className="kv"><span>Priority</span><b>{b.routing.priority}</b></div>
+            <div className="kv">
+              <span>Weights</span>
+              <b>
+                cap {b.routing.weights.capability} · cost {b.routing.weights.cost} · lat {b.routing.weights.latency}
+              </b>
+            </div>
+            <div className="drawer-note">{renderMarkdown(b.routing.reason)}</div>
+            {b.routing.candidates.length > 0 && (
+              <table className="chat-table">
+                <thead>
+                  <tr><th>Model</th><th>Cap</th><th>Cost</th><th>Lat</th><th>Score</th></tr>
+                </thead>
+                <tbody>
+                  {b.routing.candidates.map((c) => (
+                    <tr key={c.model}>
+                      <td>{shortModelName(c.model)}</td>
+                      <td>{c.capability.toFixed(2)}</td>
+                      <td>{c.cost.toFixed(2)}</td>
+                      <td>{c.latency.toFixed(2)}</td>
+                      <td>{c.score.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+
+        {b.knowledge && (
+          <section className="drawer-sec">
+            <h4>Knowledge</h4>
+            {b.knowledge.used ? (
+              <>
+                {b.knowledge.semantic_backend && (
+                  <div className="kv"><span>Search</span><b>{b.knowledge.semantic_backend}</b></div>
+                )}
+                {b.knowledge.hits.map((h, i) => (
+                  <div key={i} className="kv">
+                    <span>{h.doc_name} · part {h.ordinal + 1}</span><b>{h.score.toFixed(2)}</b>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p className="drawer-note">No uploaded documents were used for this answer.</p>
+            )}
+          </section>
+        )}
+
         <section className="drawer-sec">
           <h4>Timing</h4>
           <div className="kv"><span>Planning</span><b>{ms(b.timing.plan_ms)}</b></div>
@@ -364,6 +418,13 @@ function BenchDrawer({ turn, onClose }: { turn: Turn; onClose: () => void }) {
           <div className="kv"><span>Answer length</span><b>{b.answer_chars} chars</b></div>
           <div className="kv"><span>Models</span><b>{b.models_used.join(', ') || '—'}</b></div>
         </section>
+
+        {b.trace && b.trace.length > 0 && (
+          <section className="drawer-sec">
+            <h4>Execution trace</h4>
+            <ExecutionTrace steps={b.trace} />
+          </section>
+        )}
 
         <section className="drawer-sec">
           <h4>Trace</h4>
@@ -465,11 +526,18 @@ export function ChatPanel({ models }: { models: string[] }) {
   const [open, setOpen] = useState<number | null>(null)
   const [forceSearch, setForceSearch] = useState(false)
   const [selectedModel, setSelectedModel] = useState<string>('auto')
+  const [priority, setPriority] = useState('balanced')
+  const [useKnowledge, setUseKnowledge] = useState(true)
+  const [docCount, setDocCount] = useState(0)
   const [conversations, setConversations] = useState<StoredConversation[]>(loadConversations)
   const [activeId, setActiveId] = useState<string>(newConversationId)
   const abortRef = useRef<(() => void) | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    api.knowledgeDocs().then((k) => setDocCount(k.documents.length)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -542,6 +610,7 @@ export function ChatPanel({ models }: { models: string[] }) {
         message: q, history, models,
         forcedModel: selectedModel === 'auto' ? undefined : selectedModel,
         forceWebSearch: forceSearch,
+        priority, useKnowledge, workspaceId: getWorkspaceId(),
       },
       {
         onStatus: (stage) => patch(index, (t) => ({ ...t, status: stage })),
@@ -563,7 +632,7 @@ export function ChatPanel({ models }: { models: string[] }) {
         },
       },
     )
-  }, [busy, models, patch, turns, selectedModel, forceSearch])
+  }, [busy, models, patch, turns, selectedModel, forceSearch, priority, useKnowledge])
 
   const stop = () => {
     abortRef.current?.()
@@ -656,6 +725,22 @@ export function ChatPanel({ models }: { models: string[] }) {
             <option key={m} value={m}>{shortModelName(m)}</option>
           ))}
         </select>
+        <select
+          className="composer-select"
+          value={priority}
+          onChange={(e) => setPriority(e.target.value)}
+          title="What the router optimises for when picking a model"
+        >
+          {['balanced', 'quality', 'speed', 'cost'].map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <button
+          type="button"
+          className={`composer-toggle${useKnowledge ? ' is-active' : ''}`}
+          onClick={() => setUseKnowledge((v) => !v)}
+          title="Ground answers in the documents you uploaded"
+        >
+          📄 My documents {useKnowledge ? 'on' : 'off'}{docCount > 0 && ` (${docCount})`}
+        </button>
       </div>
 
       <div className="composer">
