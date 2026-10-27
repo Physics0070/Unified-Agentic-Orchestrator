@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # local/dev instance, "qwen3-coder:480b-cloud" for Ollama Cloud - a local
     # tag and a :cloud tag are interchangeable here, no code change needed).
     ollama_models: str = "llama3.2:3b,qwen2.5:7b"
+    # Which Gemini model the council uses. Configurable because model ids are
+    # retired on the provider's schedule, not ours: gemini-2.0-flash was
+    # hardcoded in four places and every one of them started returning 404 when
+    # it went away, taking the chat and the orchestrator down with it. Changing
+    # an env var is a deploy; changing four constants is a release.
+    gemini_model: str = "gemini-2.5-flash"
     # Cap on simultaneous in-flight model calls across the whole council, so a
     # wide fanout cannot blow through the provider's rate limit at once.
     max_concurrent_model_calls: int = Field(default=4, gt=0)

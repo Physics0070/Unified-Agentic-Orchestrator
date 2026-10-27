@@ -8,6 +8,7 @@ landing a RETRY row in the event log.
 import asyncio
 import uuid
 
+from backend.config import settings
 from backend.events import EventStore, EventType
 from backend.providers import complete, configured_providers, get_handle
 from backend.providers.ollama import OllamaAdapter
@@ -39,7 +40,7 @@ async def main() -> None:
     if "groq" in configured_providers():
         specs.append("groq:llama-3.3-70b-versatile")
     if "gemini" in configured_providers():
-        specs.append("gemini:gemini-2.0-flash")
+        specs.append(f"gemini:{settings.gemini_model}")
 
     async with EventStore() as store:
         run_id = str(uuid.uuid4())

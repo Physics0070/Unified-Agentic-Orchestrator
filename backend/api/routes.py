@@ -58,7 +58,7 @@ async def _default_models() -> list[str]:
     if "groq" in configured:
         models.append("groq:llama-3.3-70b-versatile")
     if "gemini" in configured:
-        models.append("gemini:gemini-2.0-flash")
+        models.append(f"gemini:{settings.gemini_model}")
     return models[:6]  # ChatRequest.models caps at 6
 
 
