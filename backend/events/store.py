@@ -21,8 +21,10 @@ before landing here.
 import asyncio
 import json
 import logging
+import sqlite3
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Self
 
 import turso_serverless
@@ -31,6 +33,9 @@ from backend.config import settings
 from backend.events.types import CostTotals, Event, EventType, LatencyTotals, RunRow
 
 log = logging.getLogger("aco.events")
+
+_MIGRATION = Path(__file__).resolve().parents[2] / "migrations" / "001_events.sql"
+_DEFAULT_SQLITE = "data/events.db"  # `data/` is git-ignored
 
 
 class EventStoreError(RuntimeError):
@@ -45,7 +50,11 @@ class EventStore:
     def __init__(self, url: str | None = None, token: str | None = None) -> None:
         self._url = url or settings.turso_database_url
         self._token = token or settings.turso_auth_token
-        if not self._url or not self._token:
+        # Blank URL or `file:` => local stdlib sqlite3, no Turso account needed.
+        self._sqlite = not self._url or self._url.startswith("file:")
+        if self._sqlite:
+            self._path = (self._url or "")[len("file:"):] or _DEFAULT_SQLITE
+        elif not self._token:
             raise EventStoreError("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set")
         # Guards the single shared connection: every operation goes through
         # this lock, not just append's read-modify-write, because a sync
@@ -55,12 +64,20 @@ class EventStore:
         self._conn_obj: Any = None
 
     async def __aenter__(self) -> Self:
+        def _open_sqlite():
+            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+            c = sqlite3.connect(self._path, check_same_thread=False, timeout=30)
+            c.execute("PRAGMA journal_mode = WAL")
+            c.execute("PRAGMA foreign_keys = ON")
+            c.executescript(_MIGRATION.read_text())  # idempotent
+            return c
+
         def _open():
             c = turso_serverless.connect(self._url, auth_token=self._token)
             c.execute("PRAGMA foreign_keys = ON")
             return c
 
-        self._conn_obj = await asyncio.to_thread(_open)
+        self._conn_obj = await asyncio.to_thread(_open_sqlite if self._sqlite else _open)
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -80,7 +97,7 @@ class EventStore:
         def _call():
             try:
                 return fn(self._conn_obj)
-            except turso_serverless.dbapi.Error as e:
+            except (sqlite3.Error if self._sqlite else turso_serverless.dbapi.Error) as e:
                 log.error("turso error: %s: %s", type(e).__name__, e)
                 raise EventStoreError(f"event store rejected the operation: {e}") from e
 

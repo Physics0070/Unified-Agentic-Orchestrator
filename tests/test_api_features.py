@@ -261,7 +261,9 @@ def test_pause_resume_cancel_on_an_unknown_run_are_404_not_500(monkeypatch):
 
 
 def test_a_missing_event_log_is_a_503_that_names_the_fix_not_a_bare_500(monkeypatch):
-    monkeypatch.setattr(settings, "turso_database_url", "")
+    # A blank URL now means the local SQLite fallback; a Turso URL with no token
+    # is the misconfiguration that must surface as a 503.
+    monkeypatch.setattr(settings, "turso_database_url", "libsql://example.turso.io")
     monkeypatch.setattr(settings, "turso_auth_token", "")
     r = client.get("/api/runs")
     assert r.status_code == 503

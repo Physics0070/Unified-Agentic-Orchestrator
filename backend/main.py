@@ -22,6 +22,7 @@ from backend import __version__
 from backend.api import router as api_router
 from backend.config import settings
 from backend.events import EventStoreError
+from backend.github_context import router as github_router
 from backend.providers.base import ProviderAdapter
 
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -108,6 +109,7 @@ async def health(request: Request) -> dict[str, str]:
 
 
 app.include_router(api_router)
+app.include_router(github_router)
 
 
 # Mounted last so it cannot shadow /health or future /api routes.
