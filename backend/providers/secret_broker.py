@@ -14,7 +14,16 @@ place they could leak from.
 import os
 from dataclasses import dataclass, field
 
+from dotenv import find_dotenv, load_dotenv
+
 from backend.config import settings
+
+# Keys are read from os.environ below, but a `.env` file is only parsed into
+# `settings` (pydantic-settings never exports it) - so a key written in `.env`
+# was invisible here: the provider showed as unconfigured, or Ollama Cloud was
+# called with no auth header. Load it into the environment, cwd-relative like
+# the settings' own env_file; a real environment variable still wins.
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 # `repr=False` on the secret field: a stray f-string or traceback that prints a
