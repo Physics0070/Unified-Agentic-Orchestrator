@@ -6,9 +6,12 @@ import {
 } from './api'
 import { ChatPanel } from './ChatPanel'
 import { ClarifyPanel, type Clarification } from './ClarifyPanel'
-import { GraphCanvas, StatusLegend, type NodeStatus } from './GraphCanvas'
+import { deriveStatuses, GraphCanvas, StatusLegend } from './GraphCanvas'
 import { FinalOutput } from './RunOutputPanel'
-import { Badge, Button, Empty, fitnessTone, Panel, SkeletonRows, StepRail } from './ui'
+import { AmbientField } from './ParticleField'
+import { CommandPalette, Sidebar, Toasts, VIEW_TITLES, type Command, type Toast, type View } from './Shell'
+import { recordFor, usePersisted, useRuns, useSettings, type RunRecord } from './store'
+import { Badge, Button, Empty, fitnessTone, Icon, Panel, SkeletonRows, StepRail } from './ui'
 
 // recharts (MetricsPanel) and the trace/DNA panels are only reachable from
 // the orchestrator tab, never the default chat view, so they're lazy-loaded
@@ -23,26 +26,18 @@ const WorkflowDNAPanel = lazy(() =>
   import('./WorkflowDNAPanel').then((m) => ({ default: m.WorkflowDNAPanel })),
 )
 
-const DEMO_GOAL = 'Audit this repository and produce a prioritized remediation report.'
+const ArtifactsView = lazy(() => import('./ArtifactsView').then((m) => ({ default: m.ArtifactsView })))
+const UsageView = lazy(() => import('./UsageView').then((m) => ({ default: m.UsageView })))
+const GitHubView = lazy(() => import('./GitHubView').then((m) => ({ default: m.GitHubView })))
+const SettingsView = lazy(() => import('./SettingsView').then((m) => ({ default: m.SettingsView })))
+const CustomizeView = lazy(() => import('./SettingsView').then((m) => ({ default: m.CustomizeView })))
 
-/** Node status is derived from the event log, never tracked separately. */
-function deriveStatuses(events: LogEvent[]): Record<string, NodeStatus> {
-  const s: Record<string, NodeStatus> = {}
-  for (const e of events) {
-    const n = e.node_id
-    if (!n) continue
-    switch (e.event_type) {
-      case 'NODE_START': s[n] = 'running'; break
-      case 'NODE_END': if (s[n] !== 'failed' && s[n] !== 'blocked') s[n] = 'done'; break
-      case 'BRANCH_FAILED': case 'BUDGET_EXCEEDED': s[n] = 'failed'; break
-      case 'TOOL_BLOCKED': case 'INJECTION_BLOCKED': s[n] = 'blocked'; break
-      case 'APPROVAL_REQUESTED': if (!s[n]) s[n] = 'running'; break
-      case 'APPROVAL_GRANTED': s[n] = 'done'; break
-      case 'COMPENSATE': s[n] = 'done'; break
-    }
-  }
-  return s
+const viewFromHash = (): View => {
+  const v = window.location.hash.split('/')[1]
+  return v && v in VIEW_TITLES ? (v as View) : 'chat'
 }
+
+const DEMO_GOAL = 'Audit this repository and produce a prioritized remediation report.'
 
 export default function App() {
   const [goal, setGoal] = useState(DEMO_GOAL)
@@ -63,14 +58,80 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<'trace' | 'metrics' | 'dna'>('trace')
   // Chat is the default surface: the product answers questions, and the
-  // orchestrator view explains how. The old flow is unchanged behind the tab.
-  const [mode, setMode] = useState<'chat' | 'orchestrator'>('chat')
-  const stopRef = useRef<(() => void) | null>(null)
-
-  useEffect(() => {
-    api.models().then((m) => setModels(m.models)).catch(() => {})
-    return () => stopRef.current?.()
+  // orchestrator view explains how. The view lives in the URL (#app/usage) so
+  // a refresh or a shared link lands where you were.
+  const [mode, setMode] = useState<View>(viewFromHash)
+  const setView = useCallback((v: View) => {
+    history.replaceState(null, '', `#app/${v}`)
+    setMode(v)
   }, [])
+  const { settings, patch, reset } = useSettings()
+  const { runs, upsert, dropOutput, clear } = useRuns()
+  const [repo, setRepo] = usePersisted<string | null>('aco.github.repo', null)
+  const [palette, setPalette] = useState(false)
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [runGoal, setRunGoal] = useState('')
+  const [backend, setBackend] = useState<{ ok: boolean | null; ms: number | null }>({ ok: null, ms: null })
+  const recorded = useRef<string | null>(null)
+  const toast = useCallback((text: string, tone?: Toast['tone']) => {
+    const id = Date.now() + Math.random()
+    setToasts((t) => [...t, { id, text, tone }])
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200)
+  }, [])
+  const stopRef = useRef<(() => void) | null>(null)
+  const goalRef = useRef<HTMLInputElement>(null)
+
+  // The sidebar's status dot and the model list share one probe: asking the
+  // backend what it offers is also the cheapest proof it is up.
+  const ping = useCallback(async () => {
+    const t = performance.now()
+    try {
+      const m = await api.models()
+      setModels(m.models)
+      setBackend({ ok: true, ms: Math.round(performance.now() - t) })
+    } catch { setBackend({ ok: false, ms: null }) }
+  }, [])
+  useEffect(() => {
+    ping()
+    const i = setInterval(ping, 30000)
+    return () => { clearInterval(i); stopRef.current?.() }
+  }, [ping])
+
+  // Only models the person left enabled in Settings are offered to the council.
+  const activeModels = settings.models ? models.filter((m) => settings.models!.includes(m)) : models
+  const usable = activeModels.length ? activeModels : models
+
+  // Back/forward and hand-edited URLs move the view too.
+  useEffect(() => {
+    const sync = () => { if (window.location.hash.startsWith('#app')) setMode(viewFromHash()) }
+    window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
+  }, [])
+
+  useEffect(() => { document.title = `${VIEW_TITLES[mode]} · Agent Council` }, [mode])
+
+  // Shortcuts are listed next to the controls they drive; an undiscoverable
+  // shortcut is dead code. Bound on window rather than per-input so they work
+  // wherever focus happens to be, and skipped while typing so Esc still
+  // behaves normally inside a field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey
+      const typing = (e.target as HTMLElement)?.matches?.('input, textarea')
+      if (mod && e.key === 'Enter') { e.preventDefault(); runRef.current?.() }
+      else if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette((p) => !p) }
+      else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); patch({ sidebar: !settingsRef.current.sidebar }) }
+      else if (mod && e.key === '1') { e.preventDefault(); setView('orchestrator') }
+      else if (mod && e.key === '2') { e.preventDefault(); setView('chat') }
+      else if (e.key === '/' && !typing) { e.preventDefault(); setView('orchestrator'); setTimeout(() => goalRef.current?.focus(), 0) }
+      else if (e.key === 'Escape' && !typing) setError(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
 
   const guard = useCallback(async (label: string, fn: () => Promise<void>) => {
     setBusy(label); setError(null)
@@ -82,6 +143,36 @@ export default function App() {
 
   const step = metrics || report ? 4 : runId ? 3 : graph ? 2 : clarification ? 1 : 0
 
+  // Every finished run is written to local history, once its metrics and
+  // output have arrived. Re-saving the same id keeps its original timestamp.
+  useEffect(() => {
+    if (live || !runId || !events.length || !metrics || recorded.current === `open:${runId}`) return
+    upsert(recordFor({ runId, goal: runGoal || goal, graph, events, metrics, output }))
+    if (recorded.current !== runId) { recorded.current = runId; toast('Run saved to history') }
+  }, [live, runId, events, metrics, output])
+
+  const clearRun = () => {
+    stopRef.current?.()
+    setGraph(null); setRunId(null); setEvents([]); setMetrics(null); setReplay(null)
+    setReport(null); setCouncil(null); setSelected(null); setDnaPrediction(null)
+    setOutput(null); setClarification(null); setLive(false); setError(null); setTab('trace')
+  }
+
+  const newRun = () => {
+    clearRun(); setGoal('')
+    setView('orchestrator')
+    setTimeout(() => goalRef.current?.focus(), 0)
+  }
+
+  const openRun = (r: RunRecord) => {
+    clearRun()
+    setGoal(r.goal); setRunGoal(r.goal)
+    setGraph(r.graph ?? null); setEvents(r.events ?? []); setMetrics(r.metrics ?? null)
+    setOutput(r.output ?? null); setRunId(r.id)
+    recorded.current = `open:${r.id}`
+    setView('orchestrator')
+  }
+
   const askClarify = () => guard('clarify', async () => {
     setGraph(null); setRunId(null); setEvents([]); setMetrics(null); setReplay(null)
     setReport(null); setCouncil(null); setSelected(null)
@@ -90,7 +181,7 @@ export default function App() {
   })
 
   const compile = (answers: Record<string, string>) => guard('compile', async () => {
-    const r = await api.compile(goal, answers, models, clarification?.plan.intent)
+    const r = await api.compile(goal, answers, usable, clarification?.plan.intent)
     setGraph(r.graph); setCouncil(r.council); setClarification(null)
     setDnaPrediction(r.dna_prediction)
   })
@@ -102,6 +193,7 @@ export default function App() {
     setEvents([]); setMetrics(null); setReplay(null); setOutput(null); setTab('trace')
     const approvals = graph.nodes.filter((n) => n.type === 'approval').map((n) => n.id)
     const { run_id } = await api.start(goal, graph, approvals)
+    setRunGoal(goal); recorded.current = null
     setRunId(run_id); setLive(true)
     stopRef.current?.()
     stopRef.current = streamEvents(
@@ -115,8 +207,12 @@ export default function App() {
     )
   })
 
+  const runRef = useRef<(() => void) | null>(null)
+  runRef.current = () => { if (graph && !busy && !live) run() }
+
   const redAgent = () => guard('red', async () => {
     const r = await api.redAgent()
+    setRunGoal('Red Agent drill'); recorded.current = null
     setRunId(r.run_id); setGraph(null); setMetrics(null); setClarification(null); setTab('trace')
     setEvents((await api.events(r.run_id)).events)
   })
@@ -127,68 +223,59 @@ export default function App() {
 
   const doMarginal = () => guard('marginal', async () => {
     setTab('metrics')
-    setReport(await api.marginalValue(goal, models))
+    setReport(await api.marginalValue(goal, usable))
   })
 
-  const alerts = events.filter(
-    (e) => e.event_type === 'TOOL_BLOCKED' || e.event_type === 'INJECTION_BLOCKED',
-  ).length
+  const commands: Command[] = [
+    ...(Object.keys(VIEW_TITLES) as View[]).map((v) => ({
+      id: `go-${v}`, group: 'Go to', label: VIEW_TITLES[v], run: () => setView(v),
+      hint: v === 'orchestrator' ? '⌘1' : v === 'chat' ? '⌘2' : undefined,
+    })),
+    { id: 'new', group: 'Action', label: 'New run', keywords: 'start reset', run: newRun },
+    { id: 'prompt', group: 'Action', label: 'Focus the goal prompt', hint: '/', run: () => { setView('orchestrator'); setTimeout(() => goalRef.current?.focus(), 0) } },
+    { id: 'run', group: 'Action', label: 'Run the current plan', hint: '⌘↵', keywords: 'execute start', run: () => { setView('orchestrator'); runRef.current?.() } },
+    { id: 'sidebar', group: 'Action', label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => patch({ sidebar: !settings.sidebar }) },
+    { id: 'particles', group: 'Action', label: settings.particles ? 'Turn particles off' : 'Turn particles on', keywords: 'background animation', run: () => patch({ particles: !settings.particles }) },
+    { id: 'landing', group: 'Go to', label: 'Back to the overview', run: () => { window.location.hash = '' } },
+    ...runs.filter((r) => r.events).slice(0, 10).map((r) => ({
+      id: `run-${r.id}`, group: 'Run', label: r.goal, keywords: 'open history', run: () => openRun(r),
+    })),
+  ]
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="vm h-screen flex relative" data-accent={settings.accent} data-palette={settings.palette}>
+      {/* The prism: each mark splits into red, green and blue. */}
+      {settings.particles && (
+        <AmbientField
+          key={`${settings.palette}-${settings.split}`}
+          count={settings.density} split={settings.split}
+          className="fixed inset-0 -z-10 pointer-events-none"
+        />
+      )}
+      <Sidebar
+        open={settings.sidebar} onToggle={() => patch({ sidebar: !settings.sidebar })}
+        view={mode} onView={setView} onNewRun={newRun}
+        runs={runs} onOpenRun={openRun}
+        counts={{ artifacts: runs.filter((r) => r.output?.outputs.length).length, runs: runs.length }}
+        repo={repo} backend={backend}
+      />
+      <div className="flex-1 min-w-0 flex flex-col">
       {/* ---------------------------------------------------------- header */}
-      <header className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface-1)]/70 backdrop-blur">
+      <header className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface-1)]/50">
         <div className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span
-              aria-hidden
-              className="grid place-items-center h-7 w-7 rounded-lg bg-[var(--color-accent)] text-[#032420] text-[13px] font-bold"
-            >
-              ⌘
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-[14px] font-semibold leading-tight">
-                Agent Council Orchestrator
-              </h1>
-              <p className="text-[10px] text-[var(--color-ink-faint)] font-mono leading-tight">
-                AE-03 · Latency Zero
-              </p>
-            </div>
-          </div>
-
-          <div className="ml-4 flex items-center gap-1 p-0.5 rounded-[9px] bg-[var(--color-surface-2)] border border-[var(--color-line)]">
-            {(['chat', 'orchestrator'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={`px-3 h-7 rounded-[7px] text-[12px] capitalize transition-colors ${
-                  mode === m
-                    ? 'bg-[var(--color-surface-4)] text-[var(--color-ink)]'
-                    : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink-muted)]'
-                }`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
+          <h1 className="text-[13px] uppercase tracking-[0.08em]">{VIEW_TITLES[mode]}</h1>
 
           {mode === 'orchestrator' && (
             <div className="hidden lg:block ml-2"><StepRail current={step} /></div>
           )}
 
           <div className="ml-auto flex items-center gap-2 flex-wrap">
-            {mode === 'orchestrator' && graph && (
-              <Badge tone="accent">{graph.config_hash.slice(0, 10)}</Badge>
-            )}
-            {mode === 'orchestrator' && live && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--color-running)]">
-                <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
-                streaming
-              </span>
-            )}
-            {mode === 'orchestrator' && alerts > 0 && (
-              <Badge tone="bad">{alerts} blocked</Badge>
-            )}
+            <button
+              onClick={() => setPalette(true)}
+              className="flex items-center gap-2 h-8 px-3 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] text-[11px] text-[var(--color-ink-faint)]"
+            >
+              <Icon name="search" size={13} /> Commands <kbd className="font-mono opacity-70">⌘K</kbd>
+            </button>
             {mode === 'orchestrator' && (
               <Button
                 onClick={redAgent} variant="danger" loading={busy === 'red'} disabled={!!busy}
@@ -206,52 +293,66 @@ export default function App() {
           onSubmit={(e) => { e.preventDefault(); askClarify() }}
         >
           <div className="relative flex-1 min-w-[260px]">
+            {/* A prompt, not a search box. This screen's whole vocabulary is
+                a log and a command; typing a goal is the command. */}
+            <span
+              aria-hidden
+              className="absolute left-3 top-1/2 -translate-y-1/2 font-mono text-[13px] text-[var(--color-accent-ink)] pointer-events-none select-none"
+            >
+              aco&nbsp;❯
+            </span>
             <input
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
+              ref={goalRef}
               aria-label="Goal"
-              placeholder="Describe your goal in plain English"
-              className="w-full min-h-11 pl-3 pr-16 rounded-[10px] bg-[var(--color-surface-2)] border border-[var(--color-line)] text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none transition-colors"
+              placeholder="describe the goal in plain English"
+              className="w-full min-h-11 pl-[62px] pr-16 rounded-[10px] bg-[var(--color-surface-2)] border border-[var(--color-line)] font-mono text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none transition-colors"
             />
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[var(--color-ink-faint)] tabular-nums pointer-events-none">
-              {goal.trim().length}
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-[10px] text-[var(--color-ink-faint)] pointer-events-none">
+              <kbd className="font-mono opacity-70">/</kbd>
+              <span className="tabular-nums">{goal.trim().length}</span>
             </span>
           </div>
 
           <Button
-            type="submit" variant="primary" loading={busy === 'clarify'}
+            type="submit"
+            variant={graph || runId || clarification ? 'default' : 'primary'}
+            loading={busy === 'clarify'}
             disabled={!!busy || goal.trim().length < 10}
           >
             Start
           </Button>
 
-          {graph && (
-            <>
-              <Button onClick={lock} title={locked ? 'Unlock the graph' : 'Freeze this graph'}>
-                {locked ? '🔒 Locked' : 'Lock'}
-              </Button>
-              <Button onClick={run} variant="primary" loading={busy === 'run'} disabled={!!busy || live}>
-                Approve &amp; run
-              </Button>
-            </>
-          )}
-          {runId && !live && (
-            <>
-              <Button onClick={doReplay} loading={busy === 'replay'} disabled={!!busy}>
-                Replay
-              </Button>
-              <Button onClick={doMarginal} loading={busy === 'marginal'} disabled={!!busy}>
-                {busy === 'marginal' ? 'depths 1-4…' : 'Marginal value'}
-              </Button>
-            </>
-          )}
           {live && runId && (
             <Button onClick={() => api.cancel(runId)} variant="danger">Cancel</Button>
           )}
         </form>}
       </header>
 
-      {mode === 'chat' && <ChatPanel models={models} />}
+      {mode === 'chat' && <ChatPanel models={usable} />}
+
+      {(mode === 'artifacts' || mode === 'usage' || mode === 'github' || mode === 'settings' || mode === 'customize') && (
+        <main className="flex-1 min-h-0 overflow-y-auto">
+          <Suspense fallback={<div className="p-6"><SkeletonRows n={6} /></div>}>
+            {mode === 'artifacts' && <ArtifactsView runs={runs} onOpenRun={openRun} onDrop={dropOutput} toast={toast} />}
+            {mode === 'usage' && <UsageView runs={runs} />}
+            {mode === 'github' && (
+              <GitHubView
+                repo={repo} setRepo={setRepo} toast={toast}
+                onGoal={(g) => { setGoal(g); setView('orchestrator'); setTimeout(() => goalRef.current?.focus(), 0) }}
+              />
+            )}
+            {mode === 'settings' && (
+              <SettingsView
+                settings={settings} patch={patch} reset={reset} models={models} backend={backend}
+                onPing={ping} runs={runs.length} onClearRuns={clear} toast={toast}
+              />
+            )}
+            {mode === 'customize' && <CustomizeView settings={settings} patch={patch} />}
+          </Suspense>
+        </main>
+      )}
 
       {/* ----------------------------------------------------------- alerts */}
       {mode === 'orchestrator' && error && (
@@ -285,6 +386,12 @@ export default function App() {
         </div>
       )}
 
+      {mode === 'orchestrator' && runId && !live && (
+        <RunSummary
+          metrics={metrics} busy={busy} onReplay={doReplay} onMarginal={doMarginal}
+        />
+      )}
+
       {/* ------------------------------------------------------------- main */}
       {mode === 'orchestrator' && (
       <Suspense fallback={<main className="flex-1 min-h-0 p-3"><SkeletonRows n={8} /></main>}>
@@ -308,8 +415,13 @@ export default function App() {
             </Empty>
           ) : graph ? (
             <div className="h-full flex flex-col">
-              {dnaPrediction && <DnaPredictionBanner prediction={dnaPrediction} />}
-              <div className="flex-1 min-h-0">
+              {!runId && (
+                <PlanCard
+                  graph={graph} prediction={dnaPrediction} locked={locked} busy={busy}
+                  onRun={run} onLock={lock}
+                />
+              )}
+              <div className="flex-1 min-h-[320px]">
                 <GraphCanvas
                   graph={graph} statuses={statuses} selected={selected} onSelect={setSelected}
                 />
@@ -319,10 +431,7 @@ export default function App() {
               {council && <CouncilStrip council={council} />}
             </div>
           ) : (
-            <Empty icon="◆" title="One goal in, an agent team out">
-              Type a goal and press Start. The system asks clarifying questions, requests
-              permission, then designs the agent team itself — you never hand-code an agent.
-            </Empty>
+            <PipelinePreview hero={settings.hero} />
           )}
         </Panel>
 
@@ -357,7 +466,10 @@ export default function App() {
           {tab === 'trace' ? (
             live && events.length === 0
               ? <SkeletonRows n={6} />
-              : <TraceViewer events={events} live={live} />
+              : <TraceViewer
+                  events={events} live={live} graph={graph}
+                  selected={selected} onSelect={setSelected}
+                />
           ) : tab === 'dna' ? (
             <WorkflowDNAPanel events={events} runId={runId} />
           ) : busy === 'marginal' ? (
@@ -372,7 +484,221 @@ export default function App() {
       </main>
       </Suspense>
       )}
+
+      {mode === 'orchestrator' && (live || busy) && (
+        <LiveBadge
+          text={
+            ({ clarify: 'asking', compile: 'council', replay: 'replay', marginal: 'measuring' } as Record<string, string>)[busy ?? ''] ?? 'running'
+          }
+        />
+      )}
+
+      {mode === 'orchestrator' && (
+        <StatusBar
+          busy={busy} live={live} runId={runId} graph={graph}
+          clarification={clarification} events={events} metrics={metrics}
+        />
+      )}
+      </div>
+      <CommandPalette open={palette} onClose={() => setPalette(false)} commands={commands} />
+      <Toasts items={toasts} />
     </div>
+  )
+}
+
+/**
+ * What a finished run says, and what you can do next. Replay and marginal
+ * value used to be header buttons that were live all session and meaningful
+ * only here; an action belongs next to the thing it acts on.
+ *
+ * The verdict leads because it is the one claim this product makes that
+ * nothing else does - that the council was sometimes not worth convening.
+ */
+function RunSummary({ metrics, busy, onReplay, onMarginal }: {
+  metrics: RunMetrics | null
+  busy: string | null
+  onReplay: () => void
+  onMarginal: () => void
+}) {
+  const wasteful = !!metrics && (metrics.duplicate_work > 0 || !!metrics.least_valuable_agent)
+  return (
+    <div className="shrink-0 px-3 pb-3">
+      <div
+        className="rounded-[10px] border px-3 py-2.5 flex items-center gap-3 flex-wrap"
+        style={{
+          borderColor: wasteful ? 'var(--color-warn)' : 'var(--color-line)',
+          background: wasteful ? '#fbbf240d' : 'var(--color-surface-1)',
+        }}
+      >
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--color-ink-faint)] shrink-0">
+          verdict
+        </span>
+        <p className="text-[12.5px] leading-relaxed text-[var(--color-ink)] min-w-[220px] flex-1">
+          {metrics ? metrics.verdict : 'Run finished.'}
+          {metrics?.least_valuable_agent && (
+            <>
+              {' '}
+              <span className="text-[var(--color-warn)]">
+                Least valuable: <b className="font-mono">{metrics.least_valuable_agent}</b>.
+              </span>
+            </>
+          )}
+        </p>
+        <div className="flex gap-2 shrink-0">
+          <Button size="sm" onClick={onReplay} loading={busy === 'replay'} disabled={!!busy}
+            title="Serve the run back from the event log; nothing re-executes">
+            Replay
+          </Button>
+          <Button size="sm" onClick={onMarginal} loading={busy === 'marginal'} disabled={!!busy}
+            title="Run the same goal at depth 1-4 and compare">
+            {busy === 'marginal' ? 'depths 1-4…' : 'Marginal value'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The line along the bottom of a coding agent: what state it is in, and what
+ * the session has cost so far. Replaces four stat tiles that spent a row of
+ * screen on em-dashes until something had run.
+ */
+function StatusBar({ busy, live, runId, graph, clarification, events, metrics }: {
+  busy: string | null
+  live: boolean
+  runId: string | null
+  graph: GraphSpec | null
+  clarification: Clarification | null
+  events: LogEvent[]
+  metrics: RunMetrics | null
+}) {
+  const end = events.find((e) => e.event_type === 'RUN_END')
+  const failed = (end?.payload?.failed_nodes as string[] | undefined)?.length ?? 0
+  const blocked = events.filter(
+    (e) => e.event_type === 'TOOL_BLOCKED' || e.event_type === 'INJECTION_BLOCKED',
+  ).length
+
+  let label = 'idle'
+  let color = 'var(--color-pending)'
+  if (busy === 'clarify') { label = 'asking questions'; color = 'var(--color-running)' }
+  else if (busy === 'compile') { label = 'council deliberating'; color = 'var(--color-running)' }
+  else if (live) { label = 'running'; color = 'var(--color-running)' }
+  else if (end) {
+    label = failed ? `done · ${failed} failed, compensated` : 'done'
+    color = failed ? 'var(--color-warn)' : 'var(--color-done)'
+  } else if (graph && !runId) { label = 'plan ready · awaiting approval'; color = 'var(--color-accent-ink)' }
+  else if (clarification) { label = 'awaiting your answers'; color = 'var(--color-accent-ink)' }
+
+  const wall = end?.payload?.wall_clock_ms as number | undefined
+  const t0 = events[0]?.ts, t1 = events[events.length - 1]?.ts
+  const ms = wall ?? (t0 && t1 ? Date.parse(t1) - Date.parse(t0) : null)
+  const tokens = metrics?.total_tokens ?? events.reduce((a, e) => a + e.tokens_in + e.tokens_out, 0)
+  const cost = metrics?.total_cost_usd ?? events.reduce((a, e) => a + e.cost_usd, 0)
+
+  const Item = ({ k, v, tone: c }: { k: string; v: string; tone?: string }) => (
+    <span className="whitespace-nowrap">
+      <span className="text-[var(--color-ink-faint)]">{k} </span>
+      <span style={{ color: c ?? 'var(--color-ink-muted)' }}>{v}</span>
+    </span>
+  )
+
+  return (
+    <footer className="shrink-0 border-t border-[var(--color-line)] bg-[var(--color-surface-1)]/50 px-4 py-1.5 flex items-center gap-x-4 gap-y-1 flex-wrap font-mono text-[11px]">
+      <span className="flex items-center gap-2 whitespace-nowrap" style={{ color }}>
+        <span className={`h-1.5 w-1.5 rounded-full bg-current ${live || busy ? 'animate-pulse' : ''}`} />
+        {label}
+      </span>
+      {runId && <Item k="run" v={runId.slice(0, 8)} />}
+      {graph && <Item k="cfg" v={graph.config_hash.slice(0, 8)} />}
+      {events.length > 0 && ms != null && <Item k="elapsed" v={ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`} />}
+      {events.length > 0 && <Item k="tokens" v={tokens.toLocaleString()} />}
+      {events.length > 0 && <Item k="cost" v={`$${cost.toFixed(6)}`} />}
+      {metrics && <Item k="parallel" v={`${metrics.parallel_efficiency}×`} />}
+      {metrics?.handoff_validity != null && (
+        <Item
+          k="handoffs" v={`${Math.round(metrics.handoff_validity * 100)}%`}
+          tone={metrics.handoff_validity === 1 ? 'var(--color-done)' : 'var(--color-warn)'}
+        />
+      )}
+      {blocked > 0 && <Item k="blocked" v={String(blocked)} tone="var(--color-failed)" />}
+      <span className="ml-auto hidden md:flex gap-3 text-[var(--color-ink-faint)] whitespace-nowrap">
+        <span>/ prompt</span><span>⌘K commands</span><span>⌘↵ run</span><span>esc dismiss</span>
+      </span>
+    </footer>
+  )
+}
+
+/**
+ * The resting state of the graph panel: one statement, set large and light,
+ * over iridescent light. It is the only place the interface is allowed
+ * colour that is not state, and it goes away the moment there is a graph.
+ * Below it, the pipeline's actual shape - the same information as the old
+ * sentence, shown rather than described.
+ */
+function PipelinePreview({ hero }: { hero: boolean }) {
+  const steps = [
+    ['clarify', 'asks what it needs to know'],
+    ['approval', 'you grant permission'],
+    ['fanout', 'specialists run in parallel'],
+    ['join', 'typed handoffs validate'],
+    ['verify', 'a council checks the result'],
+    ['report', 'the answer, with its cost'],
+  ]
+  return (
+    <div className="relative h-full overflow-hidden">
+      {/* Confined to the upper half so the small type below sits on plain
+          obsidian, where it keeps its contrast. */}
+      {hero && <div className="iridescent" aria-hidden style={{ inset: '-34% -18% 34% -18%' }} />}
+      <div className="relative h-full flex flex-col justify-center p-8 gap-10">
+        <h2 className="vm-display text-[var(--color-ink)] rise">
+          One goal in,<br />an agent team out.
+        </h2>
+        <div className="w-full max-w-sm">
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--color-ink-faint)] mb-3">
+            what Start will build
+          </p>
+          <ol>
+            {steps.map(([name, what], i) => (
+              <li key={name} className="flex items-baseline gap-2.5 font-mono text-[11px] leading-[1.9]">
+                <span className="text-[var(--color-ink-faint)] select-none">
+                  {i === steps.length - 1 ? '└─' : '├─'}
+                </span>
+                <span className="text-[var(--color-ink)] w-[64px] shrink-0">{name}</span>
+                <span className="text-[var(--color-ink-faint)] min-w-0">{what}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * monopo's rotating badge: text set round a circle, turning slowly. Here it
+ * says what the system is doing. It sits in a corner like the original and,
+ * like it, is punctuation rather than a control. Bottom-right, because the
+ * graph's zoom controls already own the bottom-left.
+ */
+function LiveBadge({ text }: { text: string }) {
+  const word = `${text.toUpperCase()} · `
+  return (
+    <svg
+      aria-hidden
+      className="spin-badge fixed right-5 bottom-11 z-20 pointer-events-none text-[var(--color-ink-muted)]"
+      width="68" height="68" viewBox="0 0 68 68"
+    >
+      <defs>
+        <path id="vm-ring" d="M34 34 m-25 0 a25 25 0 1 1 50 0 a25 25 0 1 1 -50 0" />
+      </defs>
+      <text fontSize="6.4" fill="currentColor" fontFamily="var(--font-mono)">
+        {/* ~3.8 units a glyph on a 157-unit ring: 42 characters closes the loop.
+            textLength is ignored on a textPath, so the word is repeated enough
+            to reach the seam and the overflow is simply not drawn. */}
+        <textPath href="#vm-ring">{word.repeat(Math.round(42 / word.length))}</textPath>
+      </text>
+    </svg>
   )
 }
 
@@ -433,33 +759,77 @@ function NodeInspector({ graph, id, locked }: { graph: GraphSpec; id: string; lo
 }
 
 /**
- * Workflow DNA's predicted fitness for this exact graph, shown here - above
- * the canvas, before the user has locked or approved anything - because
- * this is the only point in the flow a prediction can actually inform the
- * decision. By the time a run starts, the graph is already approved and
- * execution begins immediately (see backend/api/routes.py's start_run());
- * a prediction logged only there would arrive too late to matter, which is
- * exactly what happened before this banner existed.
+ * The plan, with the decision attached. This is where a coding agent asks "go
+ * ahead?": a summary of what is about to happen, then the button. The
+ * fitness prediction lives here because this is the only point it can inform
+ * anything - once a run starts the graph is already approved and execution
+ * begins immediately (see backend/api/routes.py's start_run()), so a
+ * prediction logged only there would arrive too late to matter.
  */
-function DnaPredictionBanner({ prediction }: { prediction: DnaPredictedPayload }) {
-  const mut = prediction.mutation_suggestion
+function PlanCard({ graph, prediction, locked, busy, onRun, onLock }: {
+  graph: GraphSpec
+  prediction: DnaPredictedPayload | null
+  locked: boolean
+  busy: string | null
+  onRun: () => void
+  onLock: () => void
+}) {
+  const agents = graph.nodes.filter((n) => n.agent).length
+  const parallel = Math.max(
+    0,
+    ...graph.nodes.filter((n) => n.type === 'fanout')
+      .map((f) => graph.edges.filter((e) => e.from_node === f.id).length),
+  )
+  const gates = graph.nodes.filter((n) => n.type === 'approval').length
+  const effects = [...new Set(graph.nodes.flatMap((n) => n.agent?.allowed_side_effects ?? []))]
+  const mut = prediction?.mutation_suggestion
   return (
-    <div className="shrink-0 mb-2 rounded-[10px] border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2 flex items-center gap-2 flex-wrap text-[11px]">
-      <span className="text-[var(--color-ink-faint)] uppercase tracking-[0.07em] shrink-0">
-        Predicted fitness
-      </span>
-      <Badge tone={fitnessTone(prediction.predicted_fitness)}>{prediction.predicted_fitness}</Badge>
-      <span className="text-[var(--color-ink-faint)]">
-        {prediction.estimate_source === 'history'
-          ? `from ${prediction.similar_workflow_count} similar past runs`
-          : 'cold start - no similar history yet'}
-      </span>
-      {mut && (
-        <span className="text-[var(--color-warn)]">
-          · a {mut.mutation_type.replace(/_/g, ' ')} variant predicts{' '}
-          <b className="font-semibold">{mut.predicted_fitness}</b> - this graph runs as approved
-          either way, Workflow DNA never rewrites it for you
-        </span>
+    <div className="shrink-0 m-2.5 mb-0 rounded-[12px] border border-[var(--color-line-strong)] bg-[var(--color-surface-1)]/60 p-3">
+      <div className="flex items-start gap-3 flex-wrap">
+        <div className="min-w-0 flex-1 basis-[240px]">
+          <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--color-ink-faint)]">
+            plan · {graph.config_hash.slice(0, 8)}
+          </p>
+          <p className="mt-1 text-[13px] leading-snug text-[var(--color-ink)]">
+            {agents} agents
+            {parallel > 1 && ` · ${parallel} in parallel`}
+            {gates > 0 && ` · ${gates} approval gate${gates > 1 ? 's' : ''}`}
+            {' · '}
+            {effects.length
+              ? <span className="text-[var(--color-warn)]">can {effects.join(', ')}</span>
+              : <span className="text-[var(--color-done)]">read-only</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button size="sm" onClick={onLock} title={locked ? 'Unlock the graph' : 'Freeze this graph'}>
+            {locked ? '🔒 Locked' : 'Lock'}
+          </Button>
+          <Button
+            size="sm" variant="primary" onClick={onRun} loading={busy === 'run'} disabled={!!busy}
+            title="Approve and run the graph (⌘↵)"
+          >
+            Approve &amp; run
+            <kbd className="font-mono text-[10px] opacity-60 ml-0.5">⌘↵</kbd>
+          </Button>
+        </div>
+      </div>
+      {prediction && (
+        <p className="mt-2.5 pt-2.5 border-t border-[var(--color-line)] flex items-center gap-2 flex-wrap text-[11px] text-[var(--color-ink-faint)]">
+          <span className="uppercase tracking-[0.07em]">predicted fitness</span>
+          <Badge tone={fitnessTone(prediction.predicted_fitness)}>{prediction.predicted_fitness}</Badge>
+          <span>
+            {prediction.estimate_source === 'history'
+              ? `from ${prediction.similar_workflow_count} similar past runs`
+              : 'cold start - no similar history yet'}
+          </span>
+          {mut && (
+            <span className="text-[var(--color-warn)]">
+              · the {mut.mutation_type.replace(/_/g, ' ')} variant predicts{' '}
+              <b className="font-semibold">{mut.predicted_fitness}</b> - this graph runs as approved
+              either way, Workflow DNA never rewrites it for you
+            </span>
+          )}
+        </p>
       )}
     </div>
   )

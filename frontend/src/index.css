@@ -22,10 +22,20 @@
   --color-ink-muted: #a8a8b3;
   --color-ink-faint: #6f6f7b;
 
-  /* brand */
-  --color-accent: #5eead4;
-  --color-accent-dim: #2dd4bf;
-  --color-accent-deep: #0d9488;
+  /* brand. One set of tokens for the whole product - the landing page reads
+     these too (landing.css), so a skin swaps both surfaces at once.
+
+     The accent splits in three because a dark accent cannot do every job:
+     -accent fills (buttons, the logo, a focus border), -accent-on is the text
+     that sits ON that fill, and -accent-ink is the accent used AS text, which
+     needs to be lighter to clear 4.5:1 on these surfaces. -accent-2 is the
+     secondary, used for eyebrows and highlights. */
+  --color-accent: #8052ff;
+  --color-accent-dim: #8f66ff;
+  --color-accent-deep: #5b2bd9;
+  --color-accent-ink: #a98bff;
+  --color-accent-on: #ffffff;
+  --color-accent-2: #ffb829;
 
   /* status - semantic only, never decorative */
   --color-pending: #4b4b55;
@@ -42,14 +52,85 @@
   --radius-panel: 14px;
 }
 
+/* ---------------------------------------------------------------------------
+   Skins. Try one with ?skin=ember (or signal, glacier); no argument is iris.
+   Each redefines only the brand tokens and the two page washes, so nothing
+   else in either stylesheet has to know a skin exists. --spectrum is the
+   particle palette, read once by ParticleField.tsx - the colours used to be
+   duplicated in TypeScript.
+
+   Every -ink clears 4.5:1 as text on surface-1..4 and every -on clears 4.5:1
+   on its own fill; checked before they were written down.
+   --------------------------------------------------------------------------- */
+:root {
+  --spectrum: #8052ff, #8052ff, #9a6bff, #6d3dff, #ffb829, #ffcf6b,
+              #15846e, #1fb894, #e85aff, #4f86ff;
+}
+
+:root[data-skin='ember'] {
+  --color-accent: #f2600c;
+  --color-accent-dim: #ff7a2e;
+  --color-accent-deep: #9c3807;
+  --color-accent-ink: #ff9a5c;
+  --color-accent-on: #1a0a00;
+  --color-accent-2: #ffd166;
+  --spectrum: #f2600c, #ff7a2e, #ff9a5c, #c2410c, #ffd166, #fbbf24,
+              #e11d48, #fb7185, #a855f7, #f59e0b;
+}
+
+:root[data-skin='signal'] {
+  --color-accent: #14b8a6;
+  --color-accent-dim: #2dd4bf;
+  --color-accent-deep: #0f766e;
+  --color-accent-ink: #5eead4;
+  --color-accent-on: #04221e;
+  --color-accent-2: #fbbf24;
+  --spectrum: #14b8a6, #2dd4bf, #5eead4, #0d9488, #fbbf24, #fcd34d,
+              #22d3ee, #38bdf8, #a3e635, #34d399;
+}
+
+:root[data-skin='glacier'] {
+  --color-accent: #3b82f6;
+  --color-accent-dim: #60a5fa;
+  --color-accent-deep: #1d4ed8;
+  --color-accent-ink: #93c5fd;
+  --color-accent-on: #04142e;
+  --color-accent-2: #a5f3fc;
+  --spectrum: #3b82f6, #60a5fa, #93c5fd, #2563eb, #a5f3fc, #67e8f9,
+              #818cf8, #c4b5fd, #e0f2fe, #38bdf8;
+}
+
+/* ---------------------------------------------------------------------------
+   Particle palettes, separate from the brand skin: ?particles=aurora (or
+   ember, ice, prism, mono). These touch nothing but the cloud, which is the
+   point - the background stays black and the UI accent stays wherever the
+   skin put it. Listed after the skins so they win when both are set.
+   --------------------------------------------------------------------------- */
+:root[data-particles='aurora'] {
+  --spectrum: #34d399, #10b981, #5eead4, #22d3ee, #38bdf8,
+              #a3e635, #2dd4bf, #818cf8, #67e8f9, #4ade80;
+}
+:root[data-particles='ember'] {
+  --spectrum: #f2600c, #ff7a2e, #ff9a5c, #c2410c, #ffd166,
+              #fbbf24, #e11d48, #fb7185, #a855f7, #f59e0b;
+}
+:root[data-particles='ice'] {
+  --spectrum: #e0f2fe, #bae6fd, #7dd3fc, #38bdf8, #0ea5e9,
+              #a5f3fc, #67e8f9, #c7d2fe, #818cf8, #ffffff;
+}
+:root[data-particles='prism'] {
+  --spectrum: #f87171, #fb923c, #fbbf24, #a3e635, #34d399,
+              #22d3ee, #60a5fa, #a78bfa, #e879f9, #fb7185;
+}
+:root[data-particles='mono'] {
+  --spectrum: #8052ff, #9a6bff, #a98bff, #6d3dff, #c4b5fd,
+              #7c3aed, #b49cff, #5b2bd9, #ddd6fe, #8b5cf6;
+}
+
 html { color-scheme: dark; }
 
 body {
-  background:
-    radial-gradient(60rem 40rem at 15% -10%, #0d2b28 0%, transparent 60%),
-    radial-gradient(50rem 34rem at 100% 0%, #16203a 0%, transparent 55%),
-    var(--color-surface-0);
-  background-attachment: fixed;
+  background: #000000;
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
@@ -58,7 +139,7 @@ body {
 
 /* Replace the focus ring, never remove it. */
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-accent-ink);
   outline-offset: 2px;
   border-radius: 6px;
 }
@@ -245,7 +326,7 @@ body {
   padding: 1px 5px;
 }
 .chat-link {
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -293,12 +374,12 @@ body {
 }
 .route-sep { opacity: 0.5; }
 .route-more {
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   border-bottom: 1px dotted currentColor;
   font-size: 11.5px;
   font-family: var(--font-mono);
 }
-.route-more:hover { color: var(--color-accent-dim); }
+.route-more:hover { color: var(--color-ink); }
 
 .composer-tools {
   display: flex; align-items: center; gap: 8px;
@@ -320,7 +401,7 @@ body {
 }
 .composer-toggle:hover { color: var(--color-ink-muted); }
 .composer-toggle.is-active {
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface-1));
 }
@@ -341,7 +422,7 @@ body {
   border-radius: 9px;
   border: 1px solid var(--color-line-strong);
   background: var(--color-surface-1);
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   font-size: 12px;
   text-decoration: none;
   width: fit-content;
@@ -356,23 +437,37 @@ body {
   margin: 0 auto;
   width: 100%;
 }
+.composer-field { position: relative; flex: 1; min-width: 0; }
+.composer-prompt {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--color-accent-ink);
+  pointer-events: none;
+  user-select: none;
+}
+
 .composer textarea {
-  flex: 1;
+  width: 100%;
   resize: none;
   background: var(--color-surface-1);
   border: 1px solid var(--color-line-strong);
   border-radius: 12px;
-  padding: 12px 14px;
+  /* Left padding clears the aco ❯ prompt drawn over the field. */
+  padding: 12px 14px 12px 62px;
   color: var(--color-ink);
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
   line-height: 1.5;
-  font-family: inherit;
   max-height: 200px;
   transition: border-color 0.15s;
 }
 .composer textarea:focus {
   outline: none;
-  border-color: var(--color-accent-deep);
+  border-color: var(--color-accent);
 }
 .composer textarea::placeholder { color: var(--color-ink-faint); }
 
@@ -479,7 +574,7 @@ body {
 }
 .chat-sidebar-new {
   font-size: 11.5px;
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   padding: 4px 9px;
   border-radius: 7px;
   border: 1px solid var(--color-line-strong);
@@ -554,3 +649,170 @@ body {
   .chat-hero { margin-top: 5vh; }
   .chat-hero h1 { font-size: 24px; }
 }
+
+/* ===========================================================================
+   Obsidian Gallery - the in-app surface only.
+
+   A blend of two systems. From Vivid+Co: an obsidian canvas lit from above by
+   a slate veil, bone-white type, hairline borders, zero shadows, and a prism
+   that splits light into red, green and blue. From monopo saigon: pill-shaped
+   controls against otherwise square edges, whisper-weight display type, and
+   iridescent light that appears as media behind a headline, never as UI.
+
+   Everything here hangs off .vm, set on the app's root element. That is the
+   whole reason the landing page is unaffected: it is not a descendant, and
+   every token below is redefined on .vm rather than on :root.
+
+   Chroma is reserved for state. The interface itself has no accent hue - the
+   primary action is the bone surface inverted - so the only colour on screen
+   is a running, finished, failed or blocked thing, plus the particles.
+   =========================================================================== */
+.vm {
+  /* Two easing curves, one per kind of motion. The focus-pull is Vivid's
+     (slow start, decisive stop) and carries colour and border changes; the
+     glide is monopo's and carries anything that moves. */
+  --ease-focus: cubic-bezier(0.52, 0.01, 0, 1);
+  --ease-glide: cubic-bezier(0.19, 1, 0.22, 1);
+
+  --color-surface-0: #101010;
+  --color-surface-1: #151515;
+  --color-surface-2: #1c1c1c;
+  --color-surface-3: #262626;
+  --color-surface-4: #2b323a;           /* graphite veil: selected, hovered */
+  --color-line: #403f3f;                /* the one hairline */
+  --color-line-strong: #747473;         /* control boundary, bone at ~42% */
+
+  --color-ink: #fffdf9;
+  --color-ink-muted: #c4c1ba;
+  /* Vivid's own muted blue is #6f879c, which measures 3.5:1. Lifted to clear
+     4.5:1 on every surface above, same hue. */
+  --color-ink-faint: #8ba0b3;
+
+  --color-accent: #fffdf9;
+  --color-accent-dim: #e6e2d9;
+  --color-accent-deep: #403f3f;
+  --color-accent-ink: #fffdf9;
+  --color-accent-on: #101010;
+  --color-accent-2: #8ba0b3;
+
+  /* State. Running and failed are lifted from the prism's blue and red,
+     finished and warning from monopo's sage and amber - each clears 4.5:1 as
+     11px text on the lightest surface. */
+  --color-pending: #5a5958;
+  --color-running: #6aa9ff;
+  --color-done: #a0e0ab;
+  --color-failed: #ff6b6b;
+  --color-blocked: #ff7a98;
+  --color-skipped: #403f3f;
+  --color-warn: #ffac2e;
+
+  /* The prism. Entries 0-2 are the red, green and blue channels the particle
+     field splits itself into; the rest are the neutrals it can fall back on. */
+  --spectrum: #ff2a2a, #2aff2a, #2a7fff, #fffdf9, #8ba0b3;
+
+  isolation: isolate;     /* so the fixed particle layer paints above this background */
+  background:
+    radial-gradient(90rem 46rem at 50% -15rem, rgb(73 87 100 / 0.4), transparent 70%),
+    #101010;
+  color: var(--color-ink);
+}
+
+/* Authority comes from scale, never weight. */
+.vm h1, .vm h2, .vm h3, .vm h4, .vm b, .vm strong,
+.vm [class*="font-semibold"], .vm [class*="font-medium"], .vm [class*="font-bold"] {
+  font-weight: 400;
+}
+
+/* Square edges everywhere except the controls, which are pills (rounded-full). */
+.vm [class*="rounded-"]:not([class*="rounded-full"]) { border-radius: 0; }
+
+/* Colour and border changes pull focus slowly. */
+.vm :is(button, a, summary, input, textarea, select) {
+  transition-duration: 0.5s;
+  transition-timing-function: var(--ease-focus);
+}
+
+/* Whisper-weight display type. */
+.vm .vm-display {
+  font-size: clamp(34px, 4.6vw, 64px);
+  font-weight: 300;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+}
+
+/* A step arrives rather than appears. */
+@keyframes vm-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.rise { animation: vm-rise 0.9s var(--ease-glide) both; }
+
+/* Iridescent light, as media. Sage into amber into oxblood, blurred to a
+   liquid wash and drifted by transform alone. Only ever placed behind a
+   headline, and only while the screen has nothing else to show. */
+@keyframes vm-drift {
+  to { transform: translate3d(7%, -5%, 0) rotate(9deg) scale(1.1); }
+}
+.iridescent {
+  position: absolute;
+  inset: -25%;
+  pointer-events: none;
+  background:
+    radial-gradient(40% 50% at 24% 36%, rgb(160 224 171 / 0.9), transparent 70%),
+    radial-gradient(44% 54% at 70% 44%, rgb(255 172 46 / 0.85), transparent 70%),
+    radial-gradient(50% 58% at 52% 86%, rgb(165 45 37 / 0.95), transparent 70%);
+  filter: blur(64px) saturate(0.95);
+  opacity: 0.26;
+  will-change: transform;
+  animation: vm-drift 26s var(--ease-glide) infinite alternate;
+  -webkit-mask-image: radial-gradient(closest-side, #000 52%, transparent 100%);
+          mask-image: radial-gradient(closest-side, #000 52%, transparent 100%);
+}
+
+/* monopo's rotating badge: typographic punctuation, not a control. */
+@keyframes vm-spin { to { transform: rotate(360deg); } }
+.spin-badge { animation: vm-spin 16s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .iridescent, .spin-badge, .rise { animation: none; }
+}
+
+/* ============================ shell: accents, palettes, chat ============== */
+
+.vm[data-accent='iris'], .vm [data-accent='iris']    { --color-accent: #8052ff; --color-accent-dim: #8f66ff; --color-accent-deep: #5b2bd9; --color-accent-ink: #a98bff; --color-accent-on: #fff;    --color-accent-2: #ffb829; }
+.vm[data-accent='ember'], .vm [data-accent='ember']   { --color-accent: #f2600c; --color-accent-dim: #ff7a2e; --color-accent-deep: #9c3807; --color-accent-ink: #ff9a5c; --color-accent-on: #1a0a00; --color-accent-2: #ffd166; }
+.vm[data-accent='signal'], .vm [data-accent='signal']  { --color-accent: #14b8a6; --color-accent-dim: #2dd4bf; --color-accent-deep: #0f766e; --color-accent-ink: #5eead4; --color-accent-on: #04221e; --color-accent-2: #fbbf24; }
+.vm[data-accent='glacier'], .vm [data-accent='glacier'] { --color-accent: #3b82f6; --color-accent-dim: #60a5fa; --color-accent-deep: #1d4ed8; --color-accent-ink: #93c5fd; --color-accent-on: #04142e; --color-accent-2: #a5f3fc; }
+
+/* The first three entries are the red, green and blue channels of the split. */
+.vm[data-palette='aurora'], .vm [data-palette='aurora']  { --spectrum: #2dd4bf, #8052ff, #60a5fa, #a3e635, #67e8f9; }
+.vm[data-palette='ember'], .vm [data-palette='ember']   { --spectrum: #ff7a2e, #ffb829, #ff4d6d, #ffd166, #f59e0b; }
+.vm[data-palette='ice'], .vm [data-palette='ice']     { --spectrum: #93c5fd, #a5f3fc, #e0f2fe, #7dd3fc, #ffffff; }
+.vm[data-palette='mono'], .vm [data-palette='mono']    { --spectrum: #fffdf9, #c4c1ba, #8ba0b3, #fffdf9, #747473; }
+.vm[data-palette='rainbow'], .vm [data-palette='rainbow'] { --spectrum: #ff4d4d, #ffd24d, #4dd2ff, #a3e635, #e879f9; }
+
+/* Chat joins the gallery: square planes, pill controls, light display type. */
+.vm .chat-hero h1 { font-weight: 300; font-size: clamp(36px, 5vw, 56px); line-height: 1.02; letter-spacing: -0.02em; }
+.vm .bubble-user { border-radius: 0; background: var(--color-surface-2); border-color: var(--color-line); }
+.vm .chat-sugg button, .vm .chat-code, .vm .chat-inline-code, .vm .chat-sidebar-item,
+.vm .chat-sidebar-new, .vm .workflow-panel * { border-radius: 0; }
+.vm .chat-sugg button { transition: border-color 0.3s var(--ease-focus), color 0.3s var(--ease-focus); }
+.vm .composer-toggle, .vm .composer-select { border-radius: 999px; }
+.vm .chat-sidebar { background: transparent; }
+.vm .chat-list-reopen {
+  position: absolute; left: 12px; top: 10px; z-index: 5;
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px;
+  border: 1px solid var(--color-line-strong); border-radius: 999px;
+  background: var(--color-surface-1); color: var(--color-ink-muted);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+}
+.vm .chat-list-reopen:hover { color: var(--color-ink); border-color: var(--color-ink); }
+.vm .chat-shell { position: relative; }
+@media (min-width: 1025px) {
+  .vm .chat-shell.no-list { grid-template-columns: minmax(0, 1fr) 380px; }
+}
+@media (max-width: 1024px) { .vm .chat-list-reopen { display: none; } }
+
+/* Palette preview: the first three spectrum entries, read from the palette's own rule. */
+.vm .swatch-spectrum { display: inline-block; width: 34px; height: 10px; }
+.vm .swatch-spectrum { background: linear-gradient(90deg, var(--spectrum)); }

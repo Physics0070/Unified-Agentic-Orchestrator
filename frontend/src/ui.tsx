@@ -7,11 +7,11 @@ export function Panel({ title, subtitle, right, children, className = '' }: {
 }) {
   return (
     <section
-      className={`flex flex-col min-h-0 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface-1)]/80 backdrop-blur-sm shadow-[0_1px_0_0_#ffffff08_inset,0_8px_28px_-12px_#000a] ${className}`}
+      className={`flex flex-col min-h-0 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface-1)]/50 ${className}`}
     >
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--color-line)] shrink-0">
         <div className="min-w-0">
-          <h2 className="text-[12px] font-semibold tracking-[0.08em] uppercase text-[var(--color-ink-muted)]">
+          <h2 className="text-[11px] tracking-[0.1em] uppercase text-[var(--color-ink-muted)]">
             {title}
           </h2>
           {subtitle && (
@@ -26,18 +26,22 @@ export function Panel({ title, subtitle, right, children, className = '' }: {
 }
 
 const BUTTON_VARIANTS = {
+  // The default is the ghost pill: transparent, a bone hairline that firms up
+  // on hover.
   default:
-    'bg-[var(--color-surface-3)] text-[var(--color-ink)] hover:bg-[var(--color-surface-4)] border border-[var(--color-line-strong)]',
+    'bg-transparent text-[var(--color-ink)] border border-[var(--color-line-strong)] hover:border-[var(--color-ink)]',
+  // The one filled control: the bone surface, inverted. Only ever the next
+  // thing you are meant to do.
   primary:
-    'bg-[var(--color-accent)] text-[#032420] font-semibold hover:bg-[var(--color-accent-dim)] border border-transparent shadow-[0_2px_12px_-4px_var(--color-accent-deep)]',
+    'bg-[var(--color-accent)] text-[var(--color-accent-on)] hover:bg-[var(--color-accent-dim)] border border-transparent',
   danger:
-    'bg-[#f8717119] text-[var(--color-failed)] font-semibold hover:bg-[#f8717129] border border-[#f8717155]',
+    'bg-transparent text-[var(--color-failed)] border border-[color-mix(in_srgb,var(--color-failed)_45%,transparent)] hover:border-[var(--color-failed)]',
   ghost:
-    'bg-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-2)] border border-transparent',
+    'bg-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] border border-transparent',
 } as const
 
 export function Button({
-  children, onClick, disabled, variant = 'default', title, loading, type = 'button',
+  children, onClick, disabled, variant = 'default', title, loading, type = 'button', size = 'md',
 }: {
   children: ReactNode
   onClick?: () => void
@@ -46,6 +50,7 @@ export function Button({
   title?: string
   loading?: boolean
   type?: 'button' | 'submit'
+  size?: 'sm' | 'md'
 }) {
   return (
     <button
@@ -54,7 +59,7 @@ export function Button({
       disabled={disabled || loading}
       title={title}
       aria-busy={loading || undefined}
-      className={`inline-flex items-center gap-2 min-h-11 px-4 rounded-[10px] text-[13px] transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98] ${BUTTON_VARIANTS[variant]}`}
+      className={`inline-flex items-center gap-2 ${size === 'sm' ? 'min-h-9 px-4' : 'min-h-11 px-6'} rounded-full text-[11px] uppercase tracking-[0.07em] transition-[color,background-color,border-color] disabled:opacity-40 disabled:cursor-not-allowed ${BUTTON_VARIANTS[variant]}`}
     >
       {loading && <Spinner />}
       {children}
@@ -83,13 +88,13 @@ export function Stat({ label, value, tone = 'default', hint }: {
 }) {
   return (
     <div
-      className="rounded-[10px] border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2.5 transition-colors hover:border-[var(--color-line-strong)]"
+      className="border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3 py-2.5 transition-colors hover:border-[var(--color-line-strong)]"
       title={hint}
     >
       <div className="text-[10px] uppercase tracking-[0.07em] text-[var(--color-ink-faint)]">
         {label}
       </div>
-      <div className={`text-[17px] font-semibold tabular-nums mt-0.5 ${STAT_TONES[tone]}`}>
+      <div className={`text-[22px] font-light tabular-nums mt-0.5 ${STAT_TONES[tone]}`}>
         {value}
       </div>
     </div>
@@ -105,11 +110,11 @@ export function fitnessTone(score: number): 'good' | 'warn' | 'bad' {
 
 const BADGE_TONES = {
   default: 'bg-[var(--color-surface-3)] text-[var(--color-ink-muted)]',
-  good: 'bg-[#34d3991f] text-[var(--color-done)]',
-  bad: 'bg-[#f871711f] text-[var(--color-failed)]',
-  warn: 'bg-[#fbbf241f] text-[var(--color-warn)]',
-  info: 'bg-[#60a5fa1f] text-[var(--color-running)]',
-  accent: 'bg-[#5eead41f] text-[var(--color-accent)]',
+  good: 'bg-[color-mix(in_srgb,var(--color-done)_14%,transparent)] text-[var(--color-done)]',
+  bad: 'bg-[color-mix(in_srgb,var(--color-failed)_14%,transparent)] text-[var(--color-failed)]',
+  warn: 'bg-[color-mix(in_srgb,var(--color-warn)_14%,transparent)] text-[var(--color-warn)]',
+  info: 'bg-[color-mix(in_srgb,var(--color-running)_14%,transparent)] text-[var(--color-running)]',
+  accent: 'bg-[color-mix(in_srgb,var(--color-ink)_12%,transparent)] text-[var(--color-accent-ink)]',
 } as const
 
 export function Badge({ children, tone = 'default', mono = true }: {
@@ -117,7 +122,7 @@ export function Badge({ children, tone = 'default', mono = true }: {
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap ${
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] whitespace-nowrap ${
         mono ? 'font-mono' : ''
       } ${BADGE_TONES[tone]}`}
     >
@@ -153,11 +158,11 @@ export function StepRail({ current }: { current: number }) {
           <li key={s} className="flex items-center gap-1.5">
             <span
               aria-current={state === 'active' ? 'step' : undefined}
-              className={`text-[10px] px-2 py-1 rounded-md transition-colors ${
+              className={`text-[10px] uppercase tracking-[0.06em] px-2 py-1 rounded-full transition-colors ${
                 state === 'done'
-                  ? 'text-[var(--color-done)] bg-[#34d39914]'
+                  ? 'text-[var(--color-done)]'
                   : state === 'active'
-                    ? 'text-[var(--color-accent)] bg-[#5eead418] font-semibold'
+                    ? 'text-[var(--color-ink)] bg-[color-mix(in_srgb,var(--color-ink)_10%,transparent)]'
                     : 'text-[var(--color-ink-faint)]'
               }`}
             >
@@ -179,6 +184,64 @@ export function SkeletonRows({ n = 5 }: { n?: number }) {
       {Array.from({ length: n }).map((_, i) => (
         <div key={i} className="skeleton h-7 rounded-md" style={{ opacity: 1 - i * 0.14 }} />
       ))}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------- icons */
+/* A dozen stroke icons, drawn here rather than pulled from a library: the
+   whole set is a few hundred bytes and an icon dependency is a few hundred kB. */
+
+const ICONS = {
+  graph: <><circle cx="12" cy="5" r="2" /><circle cx="5" cy="19" r="2" /><circle cx="19" cy="19" r="2" /><path d="M12 7v4M12 11 5 17M12 11l7 6" /></>,
+  chat: <path d="M4 5h16v11H9l-5 4V5Z" />,
+  box: <path d="M12 3 4 7v10l8 4 8-4V7l-8-4ZM4 7l8 4 8-4M12 11v10" />,
+  chart: <path d="M5 20V10M12 20V4M19 20v-7" />,
+  merge: <><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="14" r="2" /><path d="M6 8v8M6 8c0 4 4 6 10 6" /></>,
+  sliders: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></>,
+  gear: <><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /></>,
+  plus: <path d="M12 5v14M5 12h14" />,
+  panel: <><rect x="3" y="4" width="18" height="16" /><path d="M9 4v16" /></>,
+  search: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4-4" /></>,
+  copy: <><rect x="8" y="8" width="12" height="12" /><path d="M4 16V4h12" /></>,
+  download: <path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14" />,
+  trash: <path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13" />,
+  external: <path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6" />,
+  check: <path d="m5 12 5 5 9-10" />,
+  x: <path d="M6 6l12 12M18 6 6 18" />,
+  chevron: <path d="m9 6 6 6-6 6" />,
+} as const
+
+export type IconName = keyof typeof ICONS
+
+export function Icon({ name, size = 16, className = '' }: {
+  name: IconName; size?: number; className?: string
+}) {
+  return (
+    <svg
+      aria-hidden width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="1.6" strokeLinecap="square" strokeLinejoin="miter"
+      className={`shrink-0 ${className}`}
+    >
+      {ICONS[name]}
+    </svg>
+  )
+}
+
+/** The frame every non-canvas view sits in: a title, one line of context, a column. */
+export function Page({ title, sub, right, children }: {
+  title: string; sub?: string; right?: ReactNode; children: ReactNode
+}) {
+  return (
+    <div className="mx-auto w-full max-w-[980px] px-6 py-8">
+      <header className="flex items-end justify-between gap-4 flex-wrap mb-6">
+        <div>
+          <h2 className="vm-display text-[34px] leading-none rise">{title}</h2>
+          {sub && <p className="mt-2 text-[12px] text-[var(--color-ink-muted)] max-w-[60ch]">{sub}</p>}
+        </div>
+        {right}
+      </header>
+      {children}
     </div>
   )
 }

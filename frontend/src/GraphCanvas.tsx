@@ -3,10 +3,29 @@ import ReactFlow, {
   Background, BackgroundVariant, Controls, Handle, Position,
   type Edge, type Node, type NodeProps,
 } from 'reactflow'
-import type { GraphSpec, GraphNode } from './api'
+import type { GraphSpec, GraphNode, LogEvent } from './api'
 import { Badge } from './ui'
 
 export type NodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'skipped'
+
+/** Node status is derived from the event log, never tracked separately. */
+export function deriveStatuses(events: LogEvent[]): Record<string, NodeStatus> {
+  const s: Record<string, NodeStatus> = {}
+  for (const e of events) {
+    const n = e.node_id
+    if (!n) continue
+    switch (e.event_type) {
+      case 'NODE_START': s[n] = 'running'; break
+      case 'NODE_END': if (s[n] !== 'failed' && s[n] !== 'blocked') s[n] = 'done'; break
+      case 'BRANCH_FAILED': case 'BUDGET_EXCEEDED': s[n] = 'failed'; break
+      case 'TOOL_BLOCKED': case 'INJECTION_BLOCKED': s[n] = 'blocked'; break
+      case 'APPROVAL_REQUESTED': if (!s[n]) s[n] = 'running'; break
+      case 'APPROVAL_GRANTED': s[n] = 'done'; break
+      case 'COMPENSATE': s[n] = 'done'; break
+    }
+  }
+  return s
+}
 
 const STATUS_COLOR: Record<NodeStatus, string> = {
   pending: 'var(--color-pending)',
@@ -79,6 +98,11 @@ const nodeTypes = { aco: AcoNode }
  * plain {nodes, edges} shape rather than a fake full GraphSpec. */
 type Drawable = Pick<GraphSpec, 'nodes' | 'edges'>
 
+/** Row pitch, and how far a compensator hangs below its branch. The pitch has
+ *  to clear the drop plus a node's own height, or the next row collides. */
+const ROW_GAP = 172
+const COMPENSATE_DROP = 86
+
 /** Lays the graph out by dependency level, so the parallel row reads as parallel. */
 function layout(graph: Drawable): Record<string, { x: number; y: number }> {
   const parents = (id: string) => graph.edges.filter((e) => e.to_node === id).map((e) => e.from_node)
@@ -96,10 +120,12 @@ function layout(graph: Drawable): Record<string, { x: number; y: number }> {
   }
   graph.nodes.forEach((n) => resolve(n.id))
 
-  // Compensate nodes ride alongside the branch they compensate rather than
-  // taking their own slot in the row - counting them as siblings in the
+  // Compensate nodes hang directly below the branch they compensate rather
+  // than taking their own slot in the row - counting them as siblings in the
   // spacing math is what crowded a 4-branch graph (8 boxes fighting for one
-  // row) into an overlapping mess.
+  // row) into an overlapping mess. They are not siblings, so they get no
+  // horizontal offset either: a node is 168px wide and the old +120 put every
+  // compensator on top of its own parent.
   const byLevel: Record<number, string[]> = {}
   graph.nodes.forEach((n) => {
     if (compensators.has(n.id)) return
@@ -108,7 +134,7 @@ function layout(graph: Drawable): Record<string, { x: number; y: number }> {
 
   const pos: Record<string, { x: number; y: number }> = {}
   Object.entries(byLevel).forEach(([l, ids]) => {
-    const y = Number(l) * 130
+    const y = Number(l) * ROW_GAP
     ids.forEach((id, i) => {
       const offset = (i - (ids.length - 1) / 2) * 210
       pos[id] = { x: offset, y }
@@ -117,7 +143,7 @@ function layout(graph: Drawable): Record<string, { x: number; y: number }> {
   graph.nodes.forEach((n) => {
     if (!compensators.has(n.id)) return
     const target = pos[n.compensates ?? ''] ?? { x: 0, y: 0 }
-    pos[n.id] = { x: target.x + 120, y: target.y + 62 }
+    pos[n.id] = { x: target.x, y: target.y + COMPENSATE_DROP }
   })
   return pos
 }
@@ -163,6 +189,7 @@ export function GraphCanvas({ graph, statuses, selected, onSelect }: {
 
   return (
     <ReactFlow
+      key={safeGraph.nodes.map((n) => n.id).join('|')}
       nodes={nodes} edges={edges} nodeTypes={nodeTypes}
       fitView fitViewOptions={{ padding: 0.18 }}
       minZoom={0.2} proOptions={{ hideAttribution: true }}
