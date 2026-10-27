@@ -16,7 +16,7 @@ export function KnowledgePanel() {
 
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<'hybrid' | 'keyword' | 'semantic'>('hybrid')
-  const [rerank, setRerank] = useState(false)
+  const [rerank, setRerank] = useState(true)
   const [searching, setSearching] = useState(false)
   const [result, setResult] = useState<KnowledgeQueryResult | null>(null)
   const [qError, setQError] = useState<string | null>(null)

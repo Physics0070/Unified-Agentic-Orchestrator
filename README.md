@@ -53,9 +53,9 @@ and the system names it out loud.
 
 ## Workspace features
 
-**Multi-provider management** (`providers` tab). Ollama, Groq, Gemini, OpenAI
-and OpenRouter each have a card: paste a key, pick models, test the connection,
-disconnect. A key set here lives in process memory only - never in a log, an
+**Multi-provider management** (`/api/providers`, no UI tab). Ollama, Groq,
+Gemini, OpenAI and OpenRouter: set a key, pick models, test the connection,
+disconnect. A key set this way lives in process memory only - never in a log, an
 event row or a response - and an `ADMIN_TOKEN` (or `SECRET_KEY`) guards the
 write endpoints. Environment variables remain the durable path.
 

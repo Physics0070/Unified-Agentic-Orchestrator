@@ -21,7 +21,6 @@ const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default:
 const TraceViewer = lazy(() => import('./TraceViewer').then((m) => ({ default: m.TraceViewer })))
 const ExecutionTrace = lazy(() => import('./TracePanel').then((m) => ({ default: m.ExecutionTrace })))
 const KnowledgePanel = lazy(() => import('./KnowledgePanel').then((m) => ({ default: m.KnowledgePanel })))
-const ProvidersPanel = lazy(() => import('./ProvidersPanel').then((m) => ({ default: m.ProvidersPanel })))
 const WorkflowDNAPanel = lazy(() =>
   import('./WorkflowDNAPanel').then((m) => ({ default: m.WorkflowDNAPanel })),
 )
@@ -67,7 +66,7 @@ export default function App() {
   const [tab, setTab] = useState<'trace' | 'agents' | 'metrics' | 'dna'>('trace')
   // Chat is the default surface: the product answers questions, and the
   // orchestrator view explains how. The old flow is unchanged behind the tab.
-  const [mode, setMode] = useState<'chat' | 'orchestrator' | 'knowledge' | 'providers'>('chat')
+  const [mode, setMode] = useState<'chat' | 'orchestrator' | 'knowledge'>('chat')
   const [steps, setSteps] = useState<TraceStep[]>([])
   const stopRef = useRef<(() => void) | null>(null)
 
@@ -75,10 +74,6 @@ export default function App() {
     api.models().then((m) => setModels(m.models)).catch(() => {})
     return () => stopRef.current?.()
   }, [])
-
-  const refreshModels = useCallback(
-    () => { api.models().then((m) => setModels(m.models)).catch(() => {}) }, [],
-  )
 
   // Per-agent trace: poll while the run is live, then once more when it ends.
   useEffect(() => {
@@ -169,14 +164,11 @@ export default function App() {
               <h1 className="text-[14px] font-semibold leading-tight">
                 Agent Council Orchestrator
               </h1>
-              <p className="text-[10px] text-[var(--color-ink-faint)] font-mono leading-tight">
-                AE-03 · Latency Zero
-              </p>
             </div>
           </div>
 
           <div className="ml-4 flex items-center gap-1 p-0.5 rounded-[9px] bg-[var(--color-surface-2)] border border-[var(--color-line)]">
-            {(['chat', 'orchestrator', 'knowledge', 'providers'] as const).map((m) => (
+            {(['chat', 'orchestrator', 'knowledge'] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
@@ -272,10 +264,10 @@ export default function App() {
 
       {mode === 'chat' && <ChatPanel models={models} />}
 
-      {(mode === 'knowledge' || mode === 'providers') && (
+      {mode === 'knowledge' && (
         <main className="flex-1 min-h-0">
           <Suspense fallback={<SkeletonRows n={8} />}>
-            {mode === 'knowledge' ? <KnowledgePanel /> : <ProvidersPanel onChange={refreshModels} />}
+            <KnowledgePanel />
           </Suspense>
         </main>
       )}

@@ -258,3 +258,11 @@ def test_pause_resume_cancel_on_an_unknown_run_are_404_not_500(monkeypatch):
     monkeypatch.setattr(routes, "EventStore", Store)
     for verb in ("pause", "resume", "cancel"):
         assert client.post(f"/api/runs/missing/{verb}").status_code == 404
+
+
+def test_a_missing_event_log_is_a_503_that_names_the_fix_not_a_bare_500(monkeypatch):
+    monkeypatch.setattr(settings, "turso_database_url", "")
+    monkeypatch.setattr(settings, "turso_auth_token", "")
+    r = client.get("/api/runs")
+    assert r.status_code == 503
+    assert r.json()["error"] == "event_log_unavailable" and "TURSO" in r.json()["message"]
