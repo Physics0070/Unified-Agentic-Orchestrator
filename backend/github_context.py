@@ -53,6 +53,7 @@ async def fetch_repo_context(
         async with httpx.AsyncClient(
             base_url=_API, headers=headers, timeout=httpx.Timeout(8.0), transport=transport
         ) as c:
+
             async def get(p: str, optional: bool = False):
                 r = await c.get(f"/repos/{repo}{p}")
                 if r.status_code >= 400:
@@ -67,12 +68,17 @@ async def fetch_repo_context(
     except httpx.HTTPError:
         raise HTTPException(502, "Could not reach api.github.com.") from None
 
-    lines = [f"{meta['full_name']}: {meta.get('description') or 'no description'}",
-             f"Language: {meta.get('language') or 'n/a'}; stars: {meta.get('stargazers_count', 0)}; "
-             f"default branch: {meta.get('default_branch')}"]
+    lines = [
+        f"{meta['full_name']}: {meta.get('description') or 'no description'}",
+        f"Language: {meta.get('language') or 'n/a'}; "
+        f"stars: {meta.get('stargazers_count', 0)}; "
+        f"default branch: {meta.get('default_branch')}",
+    ]
     if isinstance(tree, list):
-        lines.append("Top-level: " + ", ".join(
-            e["name"] + ("/" if e.get("type") == "dir" else "") for e in tree[:40]))
+        lines.append(
+            "Top-level: "
+            + ", ".join(e["name"] + ("/" if e.get("type") == "dir" else "") for e in tree[:40])
+        )
     lines.append("Recent commits:")
     lines += [f"- {c['sha'][:7]} {c['commit']['message'].splitlines()[0][:100]}" for c in commits]
     if readme and readme.get("encoding") == "base64":

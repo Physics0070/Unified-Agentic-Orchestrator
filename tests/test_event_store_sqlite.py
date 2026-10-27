@@ -20,7 +20,9 @@ def test_run_events_artifacts_roundtrip(tmp_path):
         async with _store(tmp_path) as s:
             await _run(s)
             assert await s.append("r1", "RUN_START", payload={"a": 1}) == 1
-            assert await s.append_many("r1", [{"event_type": "NODE_START"}, {"event_type": "NODE_END"}]) == [2, 3]
+            assert await s.append_many(
+                "r1", [{"event_type": "NODE_START"}, {"event_type": "NODE_END"}]
+            ) == [2, 3]
             assert [e.seq for e in await s.read("r1")] == [1, 2, 3]
             assert [e.seq for e in await s.read("r1", from_seq=1)] == [2, 3]
             await s.set_run_status("r1", "done", ended=True)

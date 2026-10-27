@@ -94,10 +94,12 @@ class EventStore:
         if self._conn_obj is None:
             raise EventStoreError("EventStore used outside its async context")
 
+        driver_error = sqlite3.Error if self._sqlite else turso_serverless.dbapi.Error
+
         def _call():
             try:
                 return fn(self._conn_obj)
-            except (sqlite3.Error if self._sqlite else turso_serverless.dbapi.Error) as e:
+            except driver_error as e:
                 log.error("turso error: %s: %s", type(e).__name__, e)
                 raise EventStoreError(f"event store rejected the operation: {e}") from e
 
