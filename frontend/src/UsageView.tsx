@@ -68,7 +68,7 @@ export function UsageView({ runs }: { runs: RunRecord[] }) {
             <div className="flex gap-1">
               {(Object.keys(METRICS) as Metric[]).map((k) => (
                 <button key={k} onClick={() => setMetric(k)} aria-pressed={metric === k}
-                  className={`h-7 px-3 rounded-full border text-[10px] uppercase tracking-[0.07em] ${metric === k ? 'border-[var(--color-ink)]' : 'border-[var(--color-line)] text-[var(--color-ink-faint)]'}`}>
+                  className={`h-7 max-md:h-10 px-3 rounded-full border text-[10px] max-md:text-[12px] uppercase tracking-[0.07em] ${metric === k ? 'border-[var(--color-ink)]' : 'border-[var(--color-line)] text-[var(--color-ink-faint)]'}`}>
                   {METRICS[k].label}
                 </button>
               ))}
@@ -77,7 +77,7 @@ export function UsageView({ runs }: { runs: RunRecord[] }) {
           <div role="img" aria-label={`${m.label} per run`} className="flex items-end gap-1.5 h-36 border-b border-[var(--color-line-strong)]">
             {series.map((r) => (
               <div key={r.id} className="flex-1 min-w-0 h-full flex items-end" title={`${r.goal}\n${m.fmt(m.get(r))}`}>
-                <div className="w-full transition-[height] duration-500 ease-[cubic-bezier(0.19,1,0.22,1)]"
+                <div className="w-full max-w-[56px] mx-auto transition-[height] duration-500 ease-[cubic-bezier(0.19,1,0.22,1)]"
                   style={{ height: `${Math.max(2, (m.get(r) / max) * 100)}%`, background: r.ok ? 'var(--color-ink)' : 'var(--color-failed)', opacity: r.ok ? 0.85 : 1 }} />
               </div>
             ))}
@@ -89,7 +89,7 @@ export function UsageView({ runs }: { runs: RunRecord[] }) {
       {models.length > 0 && (
         <section>
           <h3 className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--color-ink-faint)] mb-3">By model</h3>
-          <table className="w-full text-[12px]">
+          <div className="overflow-x-auto"><table className="w-full text-[12px] min-w-[440px]">
             <thead><tr className="text-left font-mono text-[10px] uppercase text-[var(--color-ink-faint)]">
               <th className="py-1.5 font-normal">Model</th><th className="font-normal text-right">Calls</th>
               <th className="font-normal text-right">Tokens</th><th className="font-normal text-right">Cost</th></tr></thead>
@@ -99,7 +99,7 @@ export function UsageView({ runs }: { runs: RunRecord[] }) {
                 <td className="text-right tabular-nums">{v.tokens.toLocaleString()}</td>
                 <td className="text-right tabular-nums">${v.cost.toFixed(4)}</td></tr>))}
             </tbody>
-          </table>
+          </table></div>
         </section>
       )}
     </Page>

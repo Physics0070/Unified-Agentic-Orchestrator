@@ -55,11 +55,11 @@ export function ArtifactsView({ runs, onOpenRun, onDrop, toast }: {
         <div className="relative flex-1 min-w-[220px]">
           <Icon name="search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-ink-faint)]" />
           <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search artifacts" placeholder="search artifacts"
-            className="w-full h-9 pl-9 pr-3 bg-[var(--color-surface-2)] border border-[var(--color-line)] text-[12px] outline-none focus:border-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)]" />
+            className="w-full h-9 max-md:h-10 pl-9 pr-3 bg-[var(--color-surface-2)] border border-[var(--color-line)] text-[12px] outline-none focus:border-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)]" />
         </div>
         {(['all', 'report', 'file'] as const).map((k) => (
           <button key={k} onClick={() => setKind(k)} aria-pressed={kind === k}
-            className={`h-8 px-3 rounded-full border text-[11px] uppercase tracking-[0.07em] ${kind === k ? 'border-[var(--color-ink)] text-[var(--color-ink)]' : 'border-[var(--color-line)] text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]'}`}>
+            className={`h-8 max-md:h-10 px-3 rounded-full border text-[11px] max-md:text-[12px] uppercase tracking-[0.07em] ${kind === k ? 'border-[var(--color-ink)] text-[var(--color-ink)]' : 'border-[var(--color-line)] text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]'}`}>
             {k === 'all' ? `All ${items.length}` : k === 'report' ? 'Reports' : 'Files'}
           </button>
         ))}
@@ -73,9 +73,9 @@ export function ArtifactsView({ runs, onOpenRun, onDrop, toast }: {
         <ul className="border-t border-[var(--color-line)]">
           {shown.map((i) => (
             <li key={i.key} className="border-b border-[var(--color-line)]">
-              <div className="flex items-center gap-3 py-3">
+              <div className="flex items-center gap-x-3 gap-y-2 py-3 flex-wrap">
                 <Badge tone={i.kind === 'report' ? 'accent' : 'info'}>{i.kind}</Badge>
-                <button onClick={() => i.kind === 'report' && setOpen(open === i.key ? null : i.key)} className="min-w-0 flex-1 text-left">
+                <button onClick={() => i.kind === 'report' && setOpen(open === i.key ? null : i.key)} className="min-w-0 flex-1 basis-[160px] text-left">
                   <p className="text-[13px] truncate">{i.title}</p>
                   <p className="font-mono text-[10px] text-[var(--color-ink-faint)] truncate">{i.detail} · {ago(i.ts)}</p>
                 </button>
@@ -91,7 +91,7 @@ export function ArtifactsView({ runs, onOpenRun, onDrop, toast }: {
                     </Button>
                   </div>
                 ) : (
-                  <a href={i.href} target="_blank" rel="noreferrer" className="shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full border border-[var(--color-line-strong)] text-[11px] uppercase tracking-[0.07em] hover:border-[var(--color-ink)]">
+                  <a href={i.href} target="_blank" rel="noreferrer" className="shrink-0 inline-flex items-center gap-1.5 h-8 max-md:h-10 px-3 rounded-full border border-[var(--color-line-strong)] text-[11px] uppercase tracking-[0.07em] hover:border-[var(--color-ink)]">
                     <Icon name="external" size={12} /> Open
                   </a>
                 )}

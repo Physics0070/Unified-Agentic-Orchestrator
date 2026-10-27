@@ -7,9 +7,9 @@ type Patch = (p: Partial<Settings>) => void
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-6 py-3.5 border-b border-[var(--color-line)]">
-      <div className="min-w-0"><p className="text-[13px]">{label}</p>{hint && <p className="text-[11px] text-[var(--color-ink-faint)] mt-0.5">{hint}</p>}</div>
-      <div className="shrink-0">{children}</div>
+    <div className="flex items-center justify-between gap-x-6 gap-y-2 flex-wrap py-3.5 border-b border-[var(--color-line)]">
+      <div className="min-w-0 flex-1 basis-[160px]"><p className="text-[13px]">{label}</p>{hint && <p className="text-[11px] text-[var(--color-ink-faint)] mt-0.5">{hint}</p>}</div>
+      <div className="max-w-full">{children}</div>
     </div>
   )
 }
@@ -17,7 +17,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
 function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}
-      className={`relative h-5 w-9 rounded-full border transition-colors ${on ? 'bg-[var(--color-ink)] border-[var(--color-ink)]' : 'border-[var(--color-line-strong)]'}`}>
+      className={`relative h-5 w-9 after:absolute after:-inset-3 after:content-[""] rounded-full border transition-colors ${on ? 'bg-[var(--color-ink)] border-[var(--color-ink)]' : 'border-[var(--color-line-strong)]'}`}>
       <span className={`absolute top-[2px] h-3.5 w-3.5 rounded-full transition-[left] duration-300 ${on ? 'left-[18px] bg-[var(--color-surface-0)]' : 'left-[2px] bg-[var(--color-ink-faint)]'}`} />
     </button>
   )
@@ -36,7 +36,7 @@ export function CustomizeView({ settings: s, patch }: { settings: Settings; patc
         <div className="flex gap-2" role="radiogroup" aria-label="Accent">
           {ACCENTS.map((a) => (
             <button key={a} role="radio" aria-checked={s.accent === a} title={cap(a)} aria-label={cap(a)} onClick={() => patch({ accent: a })}
-              className={`h-7 w-7 rounded-full border-2 ${s.accent === a ? 'border-[var(--color-ink)]' : 'border-transparent'}`}>
+              className={`h-7 w-7 max-md:h-10 max-md:w-10 rounded-full border-2 ${s.accent === a ? 'border-[var(--color-ink)]' : 'border-transparent'}`}>
               <span data-accent={a} className="block h-full w-full rounded-full border border-black/30 bg-[var(--color-accent)]" />
             </button>))}
         </div>
@@ -45,7 +45,7 @@ export function CustomizeView({ settings: s, patch }: { settings: Settings; patc
         <div className="flex gap-2 flex-wrap justify-end max-w-[340px]" role="radiogroup" aria-label="Particle palette">
           {PALETTES.map((p) => (
             <button key={p} role="radio" aria-checked={s.palette === p} onClick={() => patch({ palette: p })}
-              className={`flex items-center gap-1.5 h-8 px-3 rounded-full border text-[11px] ${s.palette === p ? 'border-[var(--color-ink)]' : 'border-[var(--color-line)] text-[var(--color-ink-faint)]'}`}>
+              className={`flex items-center gap-1.5 h-8 max-md:h-10 px-3 rounded-full border text-[11px] max-md:text-[12px] ${s.palette === p ? 'border-[var(--color-ink)]' : 'border-[var(--color-line)] text-[var(--color-ink-faint)]'}`}>
               <span data-palette={p} className="swatch-spectrum" aria-hidden />
               <span className="ml-1.5">{cap(p)}</span>
             </button>))}

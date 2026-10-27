@@ -75,14 +75,14 @@ function TraceLegend({ live }: { live: boolean }) {
     ['RUN_END', 'good', 'wall clock and parallel efficiency'],
   ]
   return (
-    <div className="p-4">
+    <div className="p-3 lg:p-4">
       <p className="text-[10px] uppercase tracking-[0.1em] text-[var(--color-ink-faint)] mb-2.5">
         {live ? 'waiting for the first event' : 'what streams here'}
       </p>
       <div className="space-y-0">
         {rows.map(([name, t, what]) => (
           <div key={name} className={`flex items-baseline gap-2 border-l-2 pl-2.5 py-[3px] ${GUTTER[t]}`}>
-            <span className="text-[var(--color-ink-muted)] w-[150px] shrink-0">{name}</span>
+            <span className="text-[var(--color-ink-muted)] w-[130px] lg:w-[150px] shrink-0 break-all">{name}</span>
             <span className="text-[var(--color-ink-faint)] min-w-0">{what}</span>
           </div>
         ))}
@@ -107,18 +107,18 @@ function EventRow({ e, showNode }: { e: LogEvent; showNode: boolean }) {
       }`}
     >
       <summary
-        className={`flex gap-2 px-3 py-1.5 ${hasPayload ? 'cursor-pointer' : 'cursor-default'} marker:content-none [&::-webkit-details-marker]:hidden hover:bg-[var(--color-surface-2)]`}
+        className={`flex gap-2 px-3 py-2 lg:py-1.5 max-lg:flex-wrap ${hasPayload ? 'cursor-pointer' : 'cursor-default'} marker:content-none [&::-webkit-details-marker]:hidden hover:bg-[var(--color-surface-2)]`}
       >
         <span className="text-[var(--color-ink-faint)] tabular-nums w-8 shrink-0">{e.seq}</span>
-        <span className="shrink-0 w-[150px]">
+        <span className="shrink-0 lg:w-[150px]">
           <Badge tone={t === 'alert' ? 'bad' : t === 'bad' ? 'bad' : t === 'warn' ? 'warn' : t === 'good' ? 'good' : 'default'}>
             {e.event_type}
           </Badge>
         </span>
         {showNode && (
-          <span className="text-[var(--color-ink-muted)] w-[86px] shrink-0 truncate">{e.node_id ?? '—'}</span>
+          <span className="text-[var(--color-ink-muted)] w-[86px] max-lg:w-auto max-lg:max-w-[40%] shrink-0 truncate">{e.node_id ?? '—'}</span>
         )}
-        <span className={`flex-1 min-w-0 break-words ${t === 'alert' ? 'text-[var(--color-failed)] font-semibold' : 'text-[var(--color-ink-muted)]'}`}>
+        <span className={`flex-1 min-w-0 break-words max-lg:basis-full max-lg:pl-10 ${t === 'alert' ? 'text-[var(--color-failed)] font-semibold' : 'text-[var(--color-ink-muted)]'}`}>
           {summarise(e)}
         </span>
         {hasPayload && (
@@ -129,7 +129,7 @@ function EventRow({ e, showNode }: { e: LogEvent; showNode: boolean }) {
         )}
       </summary>
       {hasPayload && (
-        <pre className="mx-3 mb-2 ml-[46px] px-2.5 py-2 rounded-md bg-[var(--color-surface-0)] border border-[var(--color-line)] text-[10.5px] leading-relaxed text-[var(--color-ink-muted)] overflow-x-auto">
+        <pre className="mx-3 mb-2 lg:ml-[46px] px-2.5 py-2 rounded-md bg-[var(--color-surface-0)] border border-[var(--color-line)] text-[10.5px] leading-relaxed text-[var(--color-ink-muted)] overflow-x-auto">
           {JSON.stringify(e.payload, null, 2)}
         </pre>
       )}
@@ -227,7 +227,7 @@ function StepCard({ step, graph, selected, onSelect }: {
     >
       <summary
         onClick={() => onSelect?.(step.id)}
-        className="flex items-center gap-2.5 px-3 py-2 cursor-pointer marker:content-none [&::-webkit-details-marker]:hidden hover:bg-[var(--color-surface-2)]"
+        className="flex items-center gap-2.5 px-3 py-3 lg:py-2 cursor-pointer marker:content-none [&::-webkit-details-marker]:hidden hover:bg-[var(--color-surface-2)]"
       >
         <StatusGlyph status={step.status} />
         <span className="text-[13px] text-[var(--color-ink)]">{step.id}</span>
@@ -313,12 +313,12 @@ export function TraceViewer({ events, live, graph, selected, onSelect }: {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-1.5 flex-wrap px-3 py-2 border-b border-[var(--color-line)] shrink-0">
+      <div className="flex items-center gap-1.5 lg:flex-wrap max-lg:overflow-x-auto max-lg:[&>*]:shrink-0 px-3 py-2 border-b border-[var(--color-line)] shrink-0">
         <div role="tablist" aria-label="Trace view" className="flex p-0.5 mr-1 rounded-md bg-[var(--color-surface-2)]">
           {(['steps', 'log'] as const).map((v) => (
             <button
               key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}
-              className={`min-h-7 px-2.5 rounded text-[11px] transition-colors ${
+              className={`min-h-10 lg:min-h-7 px-3 lg:px-2.5 rounded text-[11px] transition-colors ${
                 view === v
                   ? 'bg-[var(--color-surface-4)] text-[var(--color-ink)]'
                   : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink-muted)]'
@@ -331,7 +331,7 @@ export function TraceViewer({ events, live, graph, selected, onSelect }: {
         {(['all', 'contract', 'security'] as const).map((f) => (
           <button
             key={f} onClick={() => setFilter(f)}
-            className={`min-h-8 px-2.5 rounded text-[11px] transition-colors ${
+            className={`min-h-10 lg:min-h-8 px-2.5 rounded text-[11px] transition-colors ${
               filter === f
                 ? 'bg-[var(--color-surface-3)] text-[var(--color-ink)]'
                 : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink-muted)]'
@@ -348,19 +348,19 @@ export function TraceViewer({ events, live, graph, selected, onSelect }: {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="filter…"
           aria-label="Filter events"
-          className="ml-2 min-w-0 flex-1 max-w-[150px] h-8 px-2 rounded bg-[var(--color-surface-2)] border border-[var(--color-line)] font-mono text-[11px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none"
+          className="ml-2 min-w-0 max-lg:w-28 lg:flex-1 max-w-[150px] h-10 lg:h-8 px-2 rounded bg-[var(--color-surface-2)] border border-[var(--color-line)] font-mono text-[11px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none"
         />
         <button
           onClick={() => copyTrace(events, setCopied)}
           disabled={events.length === 0}
           title="Copy the whole event log as JSON"
-          className="ml-auto min-h-8 px-2.5 rounded text-[11px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] disabled:opacity-40 transition-colors"
+          className="ml-auto min-h-10 lg:min-h-8 px-2.5 rounded text-[11px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] disabled:opacity-40 transition-colors"
         >
           {copied === 'ok' ? <span className="text-[var(--color-done)]">copied</span>
             : copied === 'fail' ? <span className="text-[var(--color-warn)]">blocked</span>
             : 'copy'}
         </button>
-        <label className="flex items-center gap-1.5 text-[11px] text-[var(--color-ink-faint)] cursor-pointer">
+        <label className="flex items-center gap-1.5 min-h-10 lg:min-h-0 px-1 text-[11px] text-[var(--color-ink-faint)] cursor-pointer">
           <input type="checkbox" checked={stick} onChange={(e) => setStick(e.target.checked)} className="accent-[var(--color-accent)]" />
           follow
         </label>

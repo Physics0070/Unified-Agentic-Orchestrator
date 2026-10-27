@@ -203,9 +203,9 @@ export function GraphCanvas({ graph, statuses, selected, onSelect }: {
 
 export function StatusLegend() {
   return (
-    <div className="flex items-center gap-3 flex-wrap">
+    <div className="flex items-center gap-x-3 gap-y-1 lg:flex-wrap max-lg:w-full max-lg:overflow-x-auto max-lg:gap-x-2.5">
       {(Object.keys(STATUS_COLOR) as NodeStatus[]).map((s) => (
-        <span key={s} className="flex items-center gap-1.5 text-[10px] text-[var(--color-ink-faint)]">
+        <span key={s} className="flex items-center gap-1.5 text-[10px] shrink-0 text-[var(--color-ink-faint)]">
           <span className="h-2 w-2 rounded-full" style={{ background: STATUS_COLOR[s] }} />
           {s}
         </span>

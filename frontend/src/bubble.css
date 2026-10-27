@@ -1,0 +1,46 @@
+/* Glass "bubble" language. Tokens only; every colour comes from existing vars. */
+.orb {
+  --tint: var(--color-ink-faint);
+  position: relative; display: inline-block; flex: none; border-radius: 9999px;
+  background:
+    radial-gradient(circle at 30% 25%, color-mix(in srgb, white 70%, transparent) 0 8%, transparent 32%),
+    radial-gradient(circle at 70% 78%, color-mix(in srgb, var(--tint) 75%, transparent), transparent 62%),
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--tint) 28%, transparent), color-mix(in srgb, var(--tint) 8%, transparent) 70%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, white 22%, transparent),
+    inset 0 -6px 12px color-mix(in srgb, var(--tint) 35%, transparent),
+    0 0 14px color-mix(in srgb, var(--tint) 30%, transparent);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  transition: box-shadow .6s var(--ease-glide);
+}
+.orb[data-state='running'] { --tint: var(--color-running); animation: orb-drift 5s ease-in-out infinite; }
+.orb[data-state='done'] { --tint: var(--color-done); }
+.orb[data-state='failed'] { --tint: var(--color-failed); }
+@keyframes orb-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(1px, -2px) scale(1.06); }
+  66% { transform: translate(-1px, 1px) scale(.97); }
+}
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px;
+  border-radius: 9999px; font-size: 11px; white-space: nowrap; color: var(--color-ink-muted);
+  border: 1px solid var(--color-line-strong);
+  background: color-mix(in srgb, var(--color-surface-2) 60%, transparent);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+
+.glass-pill, .glass-panel, .glass-btn {
+  border: 1px solid var(--color-line-strong);
+  background: color-mix(in srgb, var(--color-surface-1) 72%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 12%, transparent);
+}
+.glass-pill { border-radius: 9999px; }
+.glass-panel { border-radius: 24px; overflow: hidden; }
+.glass-btn, .bubble-hover { border-radius: 9999px; transition: background .4s var(--ease-glide), border-color .4s var(--ease-glide); }
+.glass-btn:hover, .bubble-hover:hover { background: color-mix(in srgb, var(--color-ink) 10%, transparent); border-color: var(--color-ink); }
+.bubble-hover { border: 1px solid transparent; background: transparent; box-shadow: none; }
+.bubble-hover:hover { border-color: transparent; }
+.glass-row { border-radius: 14px; margin: 0 6px; width: calc(100% - 12px); }
+
+@media (prefers-reduced-motion: reduce) { .orb[data-state='running'] { animation: none; } }

@@ -15,7 +15,7 @@ import {
 import { GraphCanvas, type NodeStatus } from './GraphCanvas'
 import { usePersisted } from './store'
 import { ExecutionTrace } from './TracePanel'
-import { Badge, Button, Icon, Spinner } from './ui'
+import { Badge, Button, Empty, Icon, Spinner } from './ui'
 
 interface Turn {
   question: string
@@ -539,7 +539,10 @@ function WorkflowPanel({ turn }: { turn: Turn | undefined }) {
           />
         </div>
       ) : (
-        <RouteLegend />
+        <div className="flex-1 min-h-0 overflow-auto">
+          <div className="h-44"><Empty title="No workflow yet">Ask a question and the route the router picked is drawn here.</Empty></div>
+          <RouteLegend />
+        </div>
       )}
 
       {p && p.clarifying_questions.length > 0 && (
@@ -567,6 +570,8 @@ export function ChatPanel({ models }: { models: string[] }) {
   const [docCount, setDocCount] = useState(0)
   const [conversations, setConversations] = useState<StoredConversation[]>(loadConversations)
   const [activeId, setActiveId] = useState<string>(newConversationId)
+  // Phones hide the sidebar/workflow columns; these open them as overlay sheets.
+  const [sheet, setSheet] = useState<'chats' | 'flow' | null>(null)
   const abortRef = useRef<(() => void) | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -688,6 +693,11 @@ export function ChatPanel({ models }: { models: string[] }) {
           className="chat-list-reopen"><Icon name="chat" size={14} /> Chats</button>
       )}
       <div className="chat-wrap">
+      <div className="chat-mobilebar">
+        <button onClick={() => setSheet('chats')}><Icon name="chat" size={14} /> Chats</button>
+        <button onClick={() => { startNew() }}>+ New</button>
+        {turns.length > 0 && <button onClick={() => setSheet('flow')}>Workflow</button>}
+      </div>
       <div className="chat-scroll">
         {turns.length === 0 && (
           <div className="chat-hero">
@@ -820,6 +830,19 @@ export function ChatPanel({ models }: { models: string[] }) {
       </div>
 
       <WorkflowPanel turn={turns[turns.length - 1]} />
+
+      {sheet && (
+        <div className="chat-sheet" onClick={() => setSheet(null)}>
+          <div className="chat-sheet-body" onClick={(e) => e.stopPropagation()}>
+            {sheet === 'chats'
+              ? <ConversationSidebar
+                  conversations={conversations} activeId={activeId}
+                  onSelect={(id) => { loadConversation(id); setSheet(null) }}
+                  onNew={() => { startNew(); setSheet(null) }} onHide={() => setSheet(null)} />
+              : <WorkflowPanel turn={turns[turns.length - 1]} />}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

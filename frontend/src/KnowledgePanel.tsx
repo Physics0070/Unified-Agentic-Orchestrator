@@ -134,7 +134,7 @@ export function KnowledgePanel() {
               >
                 {(['hybrid', 'keyword', 'semantic'] as const).map((m) => <option key={m}>{m}</option>)}
               </select>
-              <label className="inline-flex items-center gap-1.5 text-[12px] text-[var(--color-ink-muted)]">
+              <label className="inline-flex items-center gap-1.5 min-h-10 text-[12px] text-[var(--color-ink-muted)]">
                 <input type="checkbox" checked={rerank} onChange={(e) => setRerank(e.target.checked)} />
                 rerank
               </label>

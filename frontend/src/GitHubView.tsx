@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { api } from './api'
 import { ago } from './store'
 import { Badge, Button, Empty, Icon, Page, SkeletonRows } from './ui'
 
@@ -43,6 +44,18 @@ export function GitHubView({ repo, setRepo, onGoal, toast }: {
 
   useEffect(() => { if (repo) load(repo) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Goal max is 2000 chars (backend MAX_GOAL): trim the context, never the goal.
+  const attach = async (full: string) => {
+    setBusy(true)
+    try {
+      const goal = `Audit ${full} and produce a prioritized remediation report.`
+      const head = `${goal}\n\nRepository context:\n`
+      const { text } = await api.githubContext(full, token)
+      onGoal(head + text.slice(0, Math.max(0, 2000 - head.length)))
+      toast('Repository context attached')
+    } catch (e) { toast((e as Error).message, 'warn') } finally { setBusy(false) }
+  }
+
   const connect = () => {
     const full = parse(input)
     if (!full) { setErr('Enter owner/name or a github.com URL.'); return }
@@ -51,7 +64,7 @@ export function GitHubView({ repo, setRepo, onGoal, toast }: {
   }
 
   return (
-    <Page title="GitHub" sub="Live repository activity, fetched from GitHub in your browser. The orchestrator is given a goal about the repo; it does not read the code yet.">
+    <Page title="GitHub" sub="Live repository activity from GitHub. Audit and Review send a goal about the repo; Attach repo context also appends its description, top-level files, recent commits and README excerpt, fetched by the backend (code beyond that is not read).">
       <form onSubmit={(e) => { e.preventDefault(); connect() }} className="flex gap-2 flex-wrap mb-2">
         <input value={input} onChange={(e) => setInput(e.target.value)} aria-label="Repository" placeholder="owner/repo or github.com URL"
           className="flex-1 min-w-[240px] h-10 px-3 font-mono text-[12px] bg-[var(--color-surface-2)] border border-[var(--color-line)] outline-none focus:border-[var(--color-ink)]" />
@@ -61,7 +74,7 @@ export function GitHubView({ repo, setRepo, onGoal, toast }: {
       <details className="mb-6 text-[11px] text-[var(--color-ink-faint)]">
         <summary className="cursor-pointer">Private repo or rate-limited? Add a token</summary>
         <input type="password" value={token} onChange={(e) => setToken(e.target.value)} aria-label="GitHub token" placeholder="read-only personal access token"
-          className="mt-2 w-full max-w-[420px] h-9 px-3 font-mono text-[12px] bg-[var(--color-surface-2)] border border-[var(--color-line)] outline-none" />
+          className="mt-2 w-full max-w-[420px] h-9 max-md:h-10 max-md:text-[16px] px-3 font-mono text-[12px] bg-[var(--color-surface-2)] border border-[var(--color-line)] outline-none" />
         <p className="mt-1">Kept in this tab's session storage only: it is gone when the tab closes and is sent to api.github.com and nowhere else.</p>
       </details>
 
@@ -85,7 +98,10 @@ export function GitHubView({ repo, setRepo, onGoal, toast }: {
                 {data.left && <Badge tone="info">{data.left} requests left</Badge>}
               </div>
             </div>
-            <Button variant="primary" onClick={() => onGoal(`Audit ${data.repo.full_name} and produce a prioritized remediation report.`)}>Audit this repo</Button>
+            <div className="flex gap-2">
+              <Button onClick={() => attach(data.repo.full_name)} loading={busy}>Attach repo context</Button>
+              <Button variant="primary" onClick={() => onGoal(`Audit ${data.repo.full_name} and produce a prioritized remediation report.`)}>Audit this repo</Button>
+            </div>
           </section>
 
           <section>

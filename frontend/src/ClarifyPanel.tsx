@@ -25,7 +25,7 @@ export function ClarifyPanel({ clarification, onSubmit, busy }: {
   const { plan } = clarification
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-3 lg:p-4 space-y-4">
       {plan?.rationale && (
         <p className="text-[11px] leading-relaxed text-[var(--color-ink-faint)]">
           {plan.rationale}
@@ -54,7 +54,7 @@ export function ClarifyPanel({ clarification, onSubmit, busy }: {
           Permission requested
         </div>
         <p className="text-[12px] leading-relaxed text-[var(--color-ink)]">{clarification.permission}</p>
-        <label className="mt-3 flex items-center gap-2 text-[12px] cursor-pointer select-none">
+        <label className="mt-1 flex items-center gap-2 min-h-11 text-[12px] cursor-pointer select-none">
           <input
             type="checkbox" checked={granted}
             onChange={(e) => setGranted(e.target.checked)}

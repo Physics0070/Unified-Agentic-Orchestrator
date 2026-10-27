@@ -10,6 +10,7 @@ import { deriveStatuses, GraphCanvas, StatusLegend } from './GraphCanvas'
 import { FinalOutput } from './RunOutputPanel'
 import { AmbientField } from './ParticleField'
 import { CommandPalette, Sidebar, Toasts, VIEW_TITLES, type Command, type Toast, type View } from './Shell'
+import { RunOrb, type OrbState } from './Bubble'
 import { recordFor, usePersisted, useRuns, useSettings, type RunRecord } from './store'
 import { Badge, Button, Empty, fitnessTone, Icon, Panel, SkeletonRows, StepRail } from './ui'
 
@@ -31,6 +32,7 @@ const WorkflowDNAPanel = lazy(() =>
 const ArtifactsView = lazy(() => import('./ArtifactsView').then((m) => ({ default: m.ArtifactsView })))
 const UsageView = lazy(() => import('./UsageView').then((m) => ({ default: m.UsageView })))
 const GitHubView = lazy(() => import('./GitHubView').then((m) => ({ default: m.GitHubView })))
+const CompareView = lazy(() => import('./CompareView').then((m) => ({ default: m.CompareView })))
 const SettingsView = lazy(() => import('./SettingsView').then((m) => ({ default: m.SettingsView })))
 const CustomizeView = lazy(() => import('./SettingsView').then((m) => ({ default: m.CustomizeView })))
 
@@ -113,6 +115,20 @@ export default function App() {
 
   useEffect(() => { document.title = `${VIEW_TITLES[mode]} · Agent Council` }, [mode])
 
+  // Below 768px the 248px sidebar would eat the screen, so it rests on the rail
+  // there. That is a per-window state, not a saved preference: it must not
+  // overwrite the user's choice for wide screens.
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 767px)').matches)
+  const [railOpen, setRailOpen] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const on = () => { setNarrow(mq.matches); setRailOpen(false) }
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  const sidebarOpen = narrow ? railOpen : settings.sidebar
+  const toggleSidebar = () => (narrow ? setRailOpen((o) => !o) : patch({ sidebar: !settingsRef.current.sidebar }))
+
   // Shortcuts are listed next to the controls they drive; an undiscoverable
   // shortcut is dead code. Bound on window rather than per-input so they work
   // wherever focus happens to be, and skipped while typing so Esc still
@@ -123,7 +139,7 @@ export default function App() {
       const typing = (e.target as HTMLElement)?.matches?.('input, textarea')
       if (mod && e.key === 'Enter') { e.preventDefault(); runRef.current?.() }
       else if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette((p) => !p) }
-      else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); patch({ sidebar: !settingsRef.current.sidebar }) }
+      else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSidebar() }
       else if (mod && e.key === '1') { e.preventDefault(); setView('orchestrator') }
       else if (mod && e.key === '2') { e.preventDefault(); setView('chat') }
       else if (e.key === '/' && !typing) { e.preventDefault(); setView('orchestrator'); setTimeout(() => goalRef.current?.focus(), 0) }
@@ -240,6 +256,12 @@ export default function App() {
     setReport(await api.marginalValue(goal, usable))
   })
 
+  const runEnd = events.find((e) => e.event_type === 'RUN_END')
+  const orb: { state: OrbState; label: string } =
+    live || busy ? { state: 'running', label: busy && !live ? `Working: ${busy}` : 'Run in progress' }
+    : runEnd ? (runEnd.payload?.ok === false ? { state: 'failed', label: 'Last run failed' } : { state: 'done', label: 'Last run finished' })
+    : { state: 'idle', label: 'No run in progress' }
+
   const commands: Command[] = [
     ...(Object.keys(VIEW_TITLES) as View[]).map((v) => ({
       id: `go-${v}`, group: 'Go to', label: VIEW_TITLES[v], run: () => setView(v),
@@ -248,7 +270,7 @@ export default function App() {
     { id: 'new', group: 'Action', label: 'New run', keywords: 'start reset', run: newRun },
     { id: 'prompt', group: 'Action', label: 'Focus the goal prompt', hint: '/', run: () => { setView('orchestrator'); setTimeout(() => goalRef.current?.focus(), 0) } },
     { id: 'run', group: 'Action', label: 'Run the current plan', hint: '⌘↵', keywords: 'execute start', run: () => { setView('orchestrator'); runRef.current?.() } },
-    { id: 'sidebar', group: 'Action', label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => patch({ sidebar: !settings.sidebar }) },
+    { id: 'sidebar', group: 'Action', label: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: toggleSidebar },
     { id: 'particles', group: 'Action', label: settings.particles ? 'Turn particles off' : 'Turn particles on', keywords: 'background animation', run: () => patch({ particles: !settings.particles }) },
     { id: 'landing', group: 'Go to', label: 'Back to the overview', run: () => { window.location.hash = '' } },
     ...runs.filter((r) => r.events).slice(0, 10).map((r) => ({
@@ -257,7 +279,7 @@ export default function App() {
   ]
 
   return (
-    <div className="vm h-screen flex relative" data-accent={settings.accent} data-palette={settings.palette}>
+    <div className="vm h-screen flex relative overflow-hidden" data-accent={settings.accent} data-palette={settings.palette}>
       {/* The prism: each mark splits into red, green and blue. */}
       {settings.particles && (
         <AmbientField
@@ -267,7 +289,7 @@ export default function App() {
         />
       )}
       <Sidebar
-        open={settings.sidebar} onToggle={() => patch({ sidebar: !settings.sidebar })}
+        open={sidebarOpen} onToggle={toggleSidebar}
         view={mode} onView={setView} onNewRun={newRun}
         runs={runs} onOpenRun={openRun}
         counts={{ artifacts: runs.filter((r) => r.output?.outputs.length).length, runs: runs.length }}
@@ -275,27 +297,28 @@ export default function App() {
       />
       <div className="flex-1 min-w-0 flex flex-col">
       {/* ---------------------------------------------------------- header */}
-      <header className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface-1)]/50">
-        <div className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
-          <h1 className="text-[13px] uppercase tracking-[0.08em]">{VIEW_TITLES[mode]}</h1>
+      <header className="shrink-0 border-b border-[var(--color-line)] bg-[var(--color-surface-1)]/70 backdrop-blur-md">
+        <div className="flex items-center gap-2 lg:gap-3 pl-14 pr-3 lg:px-4 py-1.5 lg:py-2.5 lg:flex-wrap">
+          <RunOrb state={orb.state} label={orb.label} size={22} />
+          <h1 className="text-[12px] lg:text-[13px] truncate uppercase tracking-[0.08em]">{VIEW_TITLES[mode]}</h1>
 
           {mode === 'orchestrator' && (
             <div className="hidden lg:block ml-2"><StepRail current={step} /></div>
           )}
 
-          <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <div className="ml-auto flex items-center gap-2 lg:flex-wrap">
             <button
               onClick={() => setPalette(true)}
-              className="flex items-center gap-2 h-8 px-3 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] text-[11px] text-[var(--color-ink-faint)]"
+              className="flex items-center gap-2 h-10 lg:h-8 px-3 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] text-[11px] text-[var(--color-ink-faint)]"
             >
-              <Icon name="search" size={13} /> Commands <kbd className="font-mono opacity-70">⌘K</kbd>
+              <Icon name="search" size={13} /> <span className="hidden sm:inline">Commands</span> <kbd className="font-mono opacity-70 hidden sm:inline">⌘K</kbd>
             </button>
             {mode === 'orchestrator' && (
               <Button
                 onClick={redAgent} variant="danger" loading={busy === 'red'} disabled={!!busy}
                 title="Undeclared tool call and a smuggled instruction, both blocked"
               >
-                Red Agent
+                <span className="whitespace-nowrap">Red<span className="max-sm:hidden"> Agent</span></span>
               </Button>
             )}
           </div>
@@ -303,10 +326,10 @@ export default function App() {
 
         {/* ------------------------------------------------------ goal bar */}
         {mode === 'orchestrator' && <form
-          className="flex items-center gap-2 px-4 pb-3 flex-wrap"
+          className="flex items-center gap-2 px-3 lg:px-4 pb-2 lg:pb-3 flex-wrap"
           onSubmit={(e) => { e.preventDefault(); askClarify() }}
         >
-          <div className="relative flex-1 min-w-[260px]">
+          <div className="relative flex-1 min-w-[9.5rem] lg:min-w-[260px]">
             {/* A prompt, not a search box. This screen's whole vocabulary is
                 a log and a command; typing a goal is the command. */}
             <span
@@ -321,7 +344,7 @@ export default function App() {
               ref={goalRef}
               aria-label="Goal"
               placeholder="describe the goal in plain English"
-              className="w-full min-h-11 pl-[62px] pr-16 rounded-[10px] bg-[var(--color-surface-2)] border border-[var(--color-line)] font-mono text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none transition-colors"
+              className="w-full min-h-11 pl-[62px] pr-12 lg:pr-16 rounded-[10px] bg-[var(--color-surface-2)] border border-[var(--color-line)] font-mono text-[13px] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] outline-none transition-colors"
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-[10px] text-[var(--color-ink-faint)] pointer-events-none">
               <kbd className="font-mono opacity-70">/</kbd>
@@ -346,11 +369,12 @@ export default function App() {
 
       {mode === 'chat' && <ChatPanel models={usable} />}
 
-      {(mode === 'artifacts' || mode === 'usage' || mode === 'github' || mode === 'settings' || mode === 'customize') && (
+      {(mode === 'artifacts' || mode === 'compare' || mode === 'usage' || mode === 'github' || mode === 'settings' || mode === 'customize') && (
         <main className="flex-1 min-h-0 overflow-y-auto">
           <Suspense fallback={<div className="p-6"><SkeletonRows n={6} /></div>}>
             {mode === 'artifacts' && <ArtifactsView runs={runs} onOpenRun={openRun} onDrop={dropOutput} toast={toast} />}
             {mode === 'usage' && <UsageView runs={runs} />}
+            {mode === 'compare' && <CompareView runs={runs} onOpenRun={openRun} />}
             {mode === 'github' && (
               <GitHubView
                 repo={repo} setRepo={setRepo} toast={toast}
@@ -369,7 +393,7 @@ export default function App() {
       )}
 
       {mode === 'knowledge' && (
-        <main className="flex-1 min-h-0">
+        <main className="flex-1 min-h-0 overflow-y-auto">
           <Suspense fallback={<SkeletonRows n={8} />}>
             <KnowledgePanel />
           </Suspense>
@@ -417,12 +441,12 @@ export default function App() {
       {/* ------------------------------------------------------------- main */}
       {mode === 'orchestrator' && (
       <Suspense fallback={<main className="flex-1 min-h-0 p-3"><SkeletonRows n={8} /></main>}>
-      <main className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-3 p-3">
+      <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-2 lg:gap-3 p-2 lg:p-3">
         <Panel
           title={clarification ? 'Clarify & approve' : 'Agent graph'}
           subtitle={graph ? `${graph.nodes.length} nodes · ${graph.edges.length} edges` : undefined}
           right={graph ? <StatusLegend /> : undefined}
-          className="min-h-[340px]"
+          className="min-h-[340px] max-lg:min-h-[72vh]"
         >
           {clarification ? (
             <ClarifyPanel
@@ -443,7 +467,7 @@ export default function App() {
                   onRun={run} onLock={lock}
                 />
               )}
-              <div className="flex-1 min-h-[320px]">
+              <div className="flex-1 min-h-[320px] max-lg:min-h-[520px]">
                 <GraphCanvas
                   graph={graph} statuses={statuses} selected={selected} onSelect={setSelected}
                 />
@@ -468,14 +492,14 @@ export default function App() {
               ? metrics ? `${metrics.agents.length} agents measured` : undefined
               : runId ? 'predicts, then remembers' : undefined
           }
-          className="min-h-[340px]"
+          className="min-h-[340px] max-lg:h-[78vh]"
           right={
             <div className="flex gap-0.5 p-0.5 rounded-lg bg-[var(--color-surface-2)]">
               {(['trace', 'agents', 'metrics', 'dna'] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
-                  className={`min-h-8 px-2.5 rounded-md text-[11px] transition-colors ${
+                  className={`min-h-10 lg:min-h-8 px-2.5 rounded-md text-[11px] whitespace-nowrap transition-colors ${
                     tab === t
                       ? 'bg-[var(--color-surface-4)] text-[var(--color-ink)]'
                       : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink-muted)]'
@@ -549,19 +573,20 @@ function RunSummary({ metrics, busy, onReplay, onMarginal }: {
   onMarginal: () => void
 }) {
   const wasteful = !!metrics && (metrics.duplicate_work > 0 || !!metrics.least_valuable_agent)
+  const [open, setOpen] = useState(false)
   return (
-    <div className="shrink-0 px-3 pb-3">
+    <div className="shrink-0 px-2 lg:px-3 pb-2 lg:pb-3">
       <div
-        className="rounded-[10px] border px-3 py-2.5 flex items-center gap-3 flex-wrap"
+        className="rounded-[10px] border px-3 py-1.5 lg:py-2.5 flex items-center gap-x-3 gap-y-2 flex-wrap"
         style={{
           borderColor: wasteful ? 'var(--color-warn)' : 'var(--color-line)',
-          background: wasteful ? '#fbbf240d' : 'var(--color-surface-1)',
+          background: wasteful ? 'linear-gradient(#fbbf240d, #fbbf240d), var(--color-surface-1)' : 'var(--color-surface-1)',
         }}
       >
         <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--color-ink-faint)] shrink-0">
           verdict
         </span>
-        <p className="text-[12.5px] leading-relaxed text-[var(--color-ink)] min-w-[220px] flex-1">
+        <p className={`text-[12.5px] leading-relaxed text-[var(--color-ink)] min-w-0 lg:min-w-[220px] flex-1 ${open ? '' : 'max-lg:truncate'}`}>
           {metrics ? metrics.verdict : 'Run finished.'}
           {metrics?.least_valuable_agent && (
             <>
@@ -572,7 +597,13 @@ function RunSummary({ metrics, busy, onReplay, onMarginal }: {
             </>
           )}
         </p>
-        <div className="flex gap-2 shrink-0">
+        <button
+          onClick={() => setOpen((o) => !o)} aria-expanded={open}
+          className="lg:hidden shrink-0 min-h-10 px-2 text-[11px] text-[var(--color-ink-muted)]"
+        >
+          {open ? 'Less' : 'Details'}
+        </button>
+        <div className={`gap-2 shrink-0 ${open ? 'flex' : 'hidden lg:flex'}`}>
           <Button size="sm" onClick={onReplay} loading={busy === 'replay'} disabled={!!busy}
             title="Serve the run back from the event log; nothing re-executes">
             Replay
@@ -632,7 +663,7 @@ function StatusBar({ busy, live, runId, graph, clarification, events, metrics }:
   )
 
   return (
-    <footer className="shrink-0 border-t border-[var(--color-line)] bg-[var(--color-surface-1)]/50 px-4 py-1.5 flex items-center gap-x-4 gap-y-1 flex-wrap font-mono text-[11px]">
+    <footer className="shrink-0 border-t border-[var(--color-line)] bg-[var(--color-surface-1)]/70 backdrop-blur-md px-3 lg:px-4 py-1.5 flex items-center gap-x-4 gap-y-1 max-lg:overflow-x-auto lg:flex-wrap font-mono text-[11px]">
       <span className="flex items-center gap-2 whitespace-nowrap" style={{ color }}>
         <span className={`h-1.5 w-1.5 rounded-full bg-current ${live || busy ? 'animate-pulse' : ''}`} />
         {label}
@@ -650,7 +681,7 @@ function StatusBar({ busy, live, runId, graph, clarification, events, metrics }:
         />
       )}
       {blocked > 0 && <Item k="blocked" v={String(blocked)} tone="var(--color-failed)" />}
-      <span className="ml-auto hidden md:flex gap-3 text-[var(--color-ink-faint)] whitespace-nowrap">
+      <span className="ml-auto hidden lg:flex gap-3 text-[var(--color-ink-faint)] whitespace-nowrap">
         <span>/ prompt</span><span>⌘K commands</span><span>⌘↵ run</span><span>esc dismiss</span>
       </span>
     </footer>
@@ -714,7 +745,7 @@ function LiveBadge({ text }: { text: string }) {
   return (
     <svg
       aria-hidden
-      className="spin-badge fixed right-5 bottom-11 z-20 pointer-events-none text-[var(--color-ink-muted)]"
+      className="spin-badge max-lg:hidden fixed right-5 bottom-11 z-20 pointer-events-none text-[var(--color-ink-muted)]"
       width="68" height="68" viewBox="0 0 68 68"
     >
       <defs>
