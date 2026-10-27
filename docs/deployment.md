@@ -2,16 +2,18 @@
 
 ## The constraint that decides the architecture
 
-**The backend cannot run on Vercel or Netlify.** Both are serverless. This app
-is not.
+**The *whole* backend cannot run on a serverless platform - but chat can.**
+This app is mostly a long-lived process; the parts of it that are not are
+deployed to Vercel (see README, "Deployment"). What breaks, and what does not:
 
-| What the app does | Why serverless breaks it |
+| What the app does | On a serverless function |
 |---|---|
-| SSE event stream (`/api/runs/{id}/stream`) | A function returns and the connection dies. Vercel Hobby caps at 10s, Netlify at 10s. |
-| Runs execute in `asyncio.create_task` | The process is frozen or reclaimed once the response is sent, so the run never finishes. |
-| Council compile = 4+ sequential model calls | Minutes. Two orders of magnitude past the limit. |
-| torch + sentence-transformers | ~1 GB installed. Vercel's bundle limit is 250 MB unzipped. |
-| Ollama local models | Needs several GB resident on a host that stays up. |
+| Chat turn: plan, parallel council, streamed answer | Works - one request, one stream, up to the 300 s function limit |
+| Orchestrator run in `asyncio.create_task` | **Breaks** - the function is frozen once the response is sent, so the run never finishes |
+| SSE tail of a run (`/api/runs/{id}/stream`) | Works only while a run is progressing somewhere else (a persistent host) |
+| Knowledge workspace (in-memory index) | Works per warm instance; not durable across instances or cold starts |
+| torch + sentence-transformers (~1 GB) | Does not fit - the semantic leg falls back to char n-gram TF-IDF, and the API says so |
+| Ollama local models | Needs several GB resident on a host that stays up |
 
 So there are three supported shapes.
 

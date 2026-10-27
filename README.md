@@ -247,21 +247,45 @@ bundle.
 
 ## Deployment
 
-Split hosting, both free: the backend is a native-Python Render web service
-(no Docker, no `ollama` binary on the box - model calls go out to Ollama
-Cloud over HTTP), the frontend is a static Netlify site pointed at it via
-`VITE_API_BASE`.
+**Live on Vercel (free):** <https://unified-agentic-orchestrator.vercel.app>
+One project serves both halves: the built frontend as static files and the
+FastAPI app as a single Python function (`api/index.py`, routed by
+`vercel.json`). Same origin, so no `VITE_API_BASE` and no CORS setup.
 
-- **Backend** — Render reads `render.yaml` at the repo root directly
-  (New → Blueprint). Secrets you provide: `TURSO_DATABASE_URL`,
-  `TURSO_AUTH_TOKEN`, `SECRET_KEY`, `OLLAMA_API_KEY`, `FRONTEND_ORIGIN`, and
-  optionally `GROQ_API_KEY` / `GEMINI_API_KEY`. Everything else is already in
-  the file.
-- **Frontend** — Netlify reads `frontend/netlify.toml`. Base directory
-  `frontend`, build `npm run build`, publish `dist`. Set `VITE_API_BASE` to
-  the deployed backend's URL.
-- A free Render web service sleeps after 15 minutes idle and takes about a
-  minute to wake on the next request - expected, not a bug.
+```bash
+npm i -g vercel && vercel login
+vercel deploy --prod          # from the repo root
+```
+
+Set secrets in the Vercel dashboard (Project -> Settings -> Environment
+Variables), not in the repo: at least one model provider (`OLLAMA_BASE_URL` +
+`OLLAMA_API_KEY`, or `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY`), and
+optionally `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` for the event log. An
+`ADMIN_TOKEN` is already set on the deployed project; it guards the "set a key
+from the UI" endpoints. Vercel's Deployment Protection is on by default for new
+projects, so the URL asks for a Vercel login until you switch it off in
+Settings -> Deployment Protection.
+
+**What works on a serverless function, and what does not** - a function is not a
+process that stays up between requests:
+
+| Works on Vercel | Needs a persistent host |
+|---|---|
+| Chat: routing, council fanout, streamed answers (up to 300 s per request) | Orchestrator runs (`POST /api/runs`): execution continues in a background task after the response, which a function does not keep alive |
+| Provider management, model router, execution trace of a chat turn | Pause / resume / cancel of an in-flight run |
+| Knowledge workspace upload + hybrid retrieval | Knowledge documents surviving between instances or restarts (in memory, per instance) |
+
+For the full orchestrator, run the backend on a persistent host: `render.yaml`
+defines a free Render web service (sleeps after 15 min idle, ~1 min cold start)
+and `frontend/netlify.toml` a static Netlify site pointed at it via
+`VITE_API_BASE`. Firebase's free Spark plan cannot run this backend at all
+(no Python runtime without billing), so it is not a target.
+
+Notes learned deploying: `vercel.json` sets `"framework": null` - without it
+Vercel auto-detects FastAPI (and reads `render.yaml` as a "services" config),
+which conflicts with the static-plus-function layout. `api/requirements.txt`
+holds the runtime-only dependencies so the function bundle stays ~60 MB (the
+root `requirements.txt` also carries `datasets` and the dev tools).
 
 ---
 

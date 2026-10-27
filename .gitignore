@@ -240,3 +240,5 @@ data/
 *_notes.md
 scratch*.md
 AGENTS.md
+
+.vercel
