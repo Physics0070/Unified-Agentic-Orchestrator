@@ -7,10 +7,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ago, type RunRecord } from './store'
 import { Icon, type IconName } from './ui'
 
-export type View = 'chat' | 'orchestrator' | 'artifacts' | 'usage' | 'github' | 'customize' | 'settings'
+export type View = 'chat' | 'orchestrator' | 'knowledge' | 'artifacts' | 'usage' | 'github' | 'customize' | 'settings'
 
 export const VIEW_TITLES: Record<View, string> = {
-  chat: 'Chat', orchestrator: 'Orchestrator', artifacts: 'Artifacts', usage: 'Usage',
+  chat: 'Chat', orchestrator: 'Orchestrator', knowledge: 'Knowledge', artifacts: 'Artifacts', usage: 'Usage',
   github: 'GitHub', customize: 'Customize', settings: 'Settings',
 }
 
@@ -110,6 +110,7 @@ export function Sidebar({ open, onToggle, view, onView, onNewRun, runs, onOpenRu
           <NavButton icon="chat" label="Chat" open={open} active={view === 'chat'} onClick={() => onView('chat')} kbd="⌘2" />
         </Section>
         <Section title="Library" open={open}>
+          <NavButton icon="book" label="Knowledge" open={open} active={view === 'knowledge'} onClick={() => onView('knowledge')} />
           <NavButton icon="box" label="Artifacts" open={open} active={view === 'artifacts'} badge={counts.artifacts || undefined} onClick={() => onView('artifacts')} />
           <NavButton icon="chart" label="Usage" open={open} active={view === 'usage'} badge={counts.runs || undefined} onClick={() => onView('usage')} />
         </Section>

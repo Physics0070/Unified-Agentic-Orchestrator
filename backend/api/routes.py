@@ -1,11 +1,12 @@
 """HTTP surface. Everything the UI needs is a read of the event log."""
 
 import asyncio
+import hmac
 import json
 import logging
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
 from sse_starlette.sse import EventSourceResponse
 
 from backend.api.schemas import (
@@ -13,7 +14,11 @@ from backend.api.schemas import (
     ChatRequest,
     CompileRequest,
     GoalRequest,
+    KnowledgeQuery,
     MarginalValueRequest,
+    ProviderTest,
+    ProviderUpdate,
+    RouterExplain,
     RunRequest,
 )
 from backend.chat.files import get_file
@@ -24,7 +29,10 @@ from backend.engine.migrations import migrate
 from backend.events import EventStore, EventType
 from backend.handoff import artifact_store
 from backend.permissions.red_agent import red_agent_graph
-from backend.providers.secret_broker import configured_providers
+from backend.providers import manage
+from backend.providers.secret_broker import configured_providers, known_providers
+from backend.rag import SUPPORTED, KnowledgeError, ParseError, knowledge_base, parse_document
+from backend.trace import build_trace
 from backend.workflow_dna.orchestrator_hooks import (
     decision_payload as dna_decision_payload,
 )
@@ -42,24 +50,14 @@ async def _default_models() -> list[str]:
     """Model specs across every configured provider, Ollama first.
 
     Ollama is the tested primary path - models[0] answers, is preferred by
-    the planner, and is council chairman by default. Groq and Gemini widen
-    the council with genuinely different model families when their keys are
-    configured: different labs have different blind spots, which is the
-    actual point of a council over asking one model twice. Ollama model
-    names live in config (OLLAMA_MODELS), so a local tag and a :cloud tag are
-    interchangeable without touching this function - see backend/config.py.
+    the planner, and is council chairman by default. Other providers widen the
+    council with genuinely different model families when configured: different
+    labs have different blind spots, which is the actual point of a council
+    over asking one model twice. Which providers are live and which models each
+    contributes is owned by backend/providers/manage.py (env config plus
+    whatever a user set at runtime), so this function never changes to add one.
     """
-    configured = configured_providers()
-    models: list[str] = []
-    if "ollama" in configured:
-        models.extend(
-            f"ollama:{m.strip()}" for m in settings.ollama_models.split(",") if m.strip()
-        )
-    if "groq" in configured:
-        models.append("groq:llama-3.3-70b-versatile")
-    if "gemini" in configured:
-        models.append(f"gemini:{settings.gemini_model}")
-    return models[:6]  # ChatRequest.models caps at 6
+    return manage.all_models()
 
 
 NO_MODELS = (
@@ -83,6 +81,143 @@ def _require_models(models: list[str]) -> list[str]:
 @router.get("/models")
 async def models() -> dict:
     return {"models": await _default_models(), "providers": configured_providers()}
+
+
+# ------------------------------------------------------- provider management
+
+
+def _require_admin(token: str | None) -> None:
+    """Gate for writes that change which keys the process uses.
+
+    Reads (status) are open - they never contain a key. With neither ADMIN_TOKEN
+    nor SECRET_KEY set the writes are open in dev and refused in prod, so a
+    deployment cannot be left with an unauthenticated "set the API key" endpoint
+    by forgetting a variable.
+    """
+    expected = settings.admin_token or settings.secret_key
+    if not expected:
+        if settings.is_prod:
+            raise HTTPException(403, "set ADMIN_TOKEN to enable provider management")
+        return
+    if not token or not hmac.compare_digest(token.encode(), expected.encode()):
+        raise HTTPException(401, "invalid admin token")
+
+
+def _check_provider(provider: str) -> None:
+    if provider not in known_providers():
+        raise HTTPException(404, "unknown provider")
+
+
+def _provider_payload() -> dict:
+    return {"providers": manage.status(),
+            "admin_required": bool(settings.admin_token or settings.secret_key)
+                              or settings.is_prod}
+
+
+@router.get("/providers")
+async def providers_status() -> dict:
+    return _provider_payload()
+
+
+@router.put("/providers/{provider}")
+async def providers_update(
+    provider: str, body: ProviderUpdate, x_admin_token: str | None = Header(default=None),
+) -> dict:
+    _check_provider(provider)
+    _require_admin(x_admin_token)
+    try:
+        manage.connect(provider, body.api_key, body.base_url)
+        if body.models is not None:
+            manage.set_models(provider, body.models)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return _provider_payload()
+
+
+@router.delete("/providers/{provider}")
+async def providers_remove(
+    provider: str, x_admin_token: str | None = Header(default=None),
+) -> dict:
+    _check_provider(provider)
+    _require_admin(x_admin_token)
+    manage.disconnect(provider)
+    return _provider_payload()
+
+
+@router.post("/providers/{provider}/test")
+async def providers_test(provider: str, body: ProviderTest) -> dict:
+    _check_provider(provider)
+    return await manage.check_connection(provider, body.model)
+
+
+@router.post("/router/explain")
+async def router_explain(req: RouterExplain) -> dict:
+    """Which model the router would pick for this message, and why - every
+    candidate's capability/cost/latency components, not just the winner."""
+    from backend.chat import plan_for
+    from backend.chat.planner import pick_planner_model
+    from backend.providers.router import route_model
+
+    models_ = _require_models(req.models or await _default_models())
+    plan = await plan_for(req.message, pick_planner_model(models_))
+    decision = route_model(models_, plan.intent, plan.complexity, req.priority)
+    return {"plan": {"intent": plan.intent, "complexity": plan.complexity,
+                     "rationale": plan.rationale, "source": plan.source},
+            "decision": decision.model_dump()}
+
+
+# ------------------------------------------------------ knowledge workspace
+
+
+def _knowledge_summary(workspace_id: str) -> dict:
+    try:
+        ws = knowledge_base.get(workspace_id)
+    except KnowledgeError as e:
+        raise HTTPException(400, str(e)) from e
+    return {**ws.summary(), "supported": SUPPORTED, "max_bytes": settings.max_upload_bytes}
+
+
+@router.get("/knowledge/documents")
+async def knowledge_documents(workspace_id: str) -> dict:
+    return await asyncio.to_thread(_knowledge_summary, workspace_id)
+
+
+@router.post("/knowledge/upload")
+async def knowledge_upload(workspace_id: str = Form(...), file: UploadFile = File(...),  # noqa: B008
+) -> dict:
+    name = (file.filename or "upload").replace("\\", "/").rsplit("/", 1)[-1][:120]
+    data = await file.read(settings.max_upload_bytes + 1)
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(413, f"file is over the {settings.max_upload_bytes // 1024} KB limit")
+    try:
+        ws = knowledge_base.get(workspace_id)
+        text = await asyncio.to_thread(parse_document, name, data)
+        info = await asyncio.to_thread(ws.add_document, name, text)
+    except (ParseError, KnowledgeError) as e:
+        raise HTTPException(422, str(e)) from e
+    return {**(await asyncio.to_thread(_knowledge_summary, workspace_id)),
+            "document": info.to_dict()}
+
+
+@router.delete("/knowledge/documents/{doc_id}")
+async def knowledge_delete(doc_id: str, workspace_id: str) -> dict:
+    try:
+        ws = knowledge_base.get(workspace_id, create=False)
+    except KnowledgeError as e:
+        raise HTTPException(400, str(e)) from e
+    if ws is None or not await asyncio.to_thread(ws.remove_document, doc_id):
+        raise HTTPException(404, "no such document")
+    return await asyncio.to_thread(_knowledge_summary, workspace_id)
+
+
+@router.post("/knowledge/query")
+async def knowledge_query(req: KnowledgeQuery) -> dict:
+    ws = knowledge_base.get(req.workspace_id, create=False)
+    if ws is None:
+        return {"query": req.query, "mode": req.mode, "reranked": False, "hits": [],
+                "semantic_backend": None, "documents": 0, "chunks": 0}
+    return await asyncio.to_thread(
+        ws.search, req.query, top_k=req.top_k, mode=req.mode, rerank=req.rerank)
 
 
 @router.get("/models/catalog")
@@ -124,6 +259,8 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
             async for evt in run_turn(
                 req.message, history=history, models=models_, seed=req.seed, store=store,
                 force_web_search=req.force_web_search, forced_model=req.forced_model,
+                priority=req.priority, workspace_id=req.workspace_id,
+                use_knowledge=req.use_knowledge,
             ):
                 if await request.is_disconnected():
                     return
@@ -167,9 +304,10 @@ async def chat_plan(req: ChatRequest) -> dict:
     none" is the first thing anyone asks about the router.
     """
     from backend.chat import plan_for
+    from backend.chat.planner import pick_planner_model
 
     models_ = _require_models(req.models or await _default_models())
-    plan = await plan_for(req.message, models_[0] if models_ else None)
+    plan = await plan_for(req.message, pick_planner_model(models_))
     return {
         **plan.model_dump(),
         "route": "council" if plan.needs_council else "fast",
@@ -185,11 +323,12 @@ async def clarify(req: GoalRequest) -> dict:
     model is down is worse than three generic questions.
     """
     from backend.chat import plan_for
+    from backend.chat.planner import pick_planner_model
 
     models_ = _require_models(req.models or await _default_models())
-    plan = await plan_for(req.goal, models_[0] if models_ else None)
+    plan = await plan_for(req.goal, pick_planner_model(models_))
 
-    questions = plan.clarifying_questions or clarifying_questions(req.goal)
+    questions = plan.clarifying_questions or clarifying_questions(req.goal, plan.intent)
     branches = [s.id for s in plan.specialists] or ["security", "quality", "docs"]
     return {
         "questions": [{"id": f"q{i}", "text": q} for i, q in enumerate(questions)],
@@ -280,7 +419,8 @@ async def start_run(req: RunRequest) -> dict:
         async with EventStore() as s:
             try:
                 result = await Executor(
-                    s, graph, run_id, seed=req.seed, approvals=set(req.approvals)
+                    s, graph, run_id, seed=req.seed, approvals=set(req.approvals),
+                    goal=req.goal,
                 ).run()
                 # Workflow DNA: record the real outcome for future predictions.
                 await record_and_log(s, graph, run_id, result, predicted_fitness)
@@ -307,12 +447,25 @@ async def approve(run_id: str, req: ApprovalRequest) -> dict:
     return {"ok": True}
 
 
+async def _live_run(store: EventStore, run_id: str):
+    """404 for an unknown run, 409 for one that already ended - pause/resume/
+    cancel used to write an event row for any id, which the foreign key turned
+    into a 500, and silently "paused" runs that had already finished."""
+    row = await store.get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown run")
+    if row.ended_at or row.status in ("done", "failed", "cancelled"):
+        raise HTTPException(status_code=409, detail=f"run already {row.status}")
+    return row
+
+
 @router.post("/runs/{run_id}/cancel")
 async def cancel(run_id: str) -> dict:
-    task = _TASKS.get(run_id)
-    if task:
-        task.cancel()
     async with EventStore() as store:
+        await _live_run(store, run_id)
+        task = _TASKS.get(run_id)
+        if task:
+            task.cancel()
         await store.append(run_id, EventType.CANCEL, payload={"by": "user"})
         await store.set_run_status(run_id, "cancelled", ended=True)
     return {"ok": True}
@@ -321,6 +474,7 @@ async def cancel(run_id: str) -> dict:
 @router.post("/runs/{run_id}/pause")
 async def pause(run_id: str) -> dict:
     async with EventStore() as store:
+        await _live_run(store, run_id)
         await store.append(run_id, EventType.PAUSE, payload={"by": "user"})
         await store.set_run_status(run_id, "paused")
     return {"ok": True}
@@ -329,6 +483,7 @@ async def pause(run_id: str) -> dict:
 @router.post("/runs/{run_id}/resume")
 async def resume(run_id: str) -> dict:
     async with EventStore() as store:
+        await _live_run(store, run_id)
         await store.append(run_id, EventType.RESUME, payload={"by": "user"})
         await store.set_run_status(run_id, "running")
     return {"ok": True}
@@ -393,6 +548,17 @@ async def output(run_id: str) -> dict:
                 if a.node_id in sinks
             ],
         }
+
+
+@router.get("/runs/{run_id}/trace")
+async def trace(run_id: str) -> dict:
+    """Per-agent execution trace: input, output, tools, duration, status."""
+    async with EventStore() as store:
+        row = await store.get_run(run_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        return {"run_id": run_id, "status": row.status,
+                **build_trace(await store.read(run_id), row.graph_spec)}
 
 
 @router.get("/runs/{run_id}/stream")

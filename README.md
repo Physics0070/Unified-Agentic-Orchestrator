@@ -51,6 +51,44 @@ and the system names it out loud.
 
 ---
 
+## Workspace features
+
+**Multi-provider management** (`/api/providers`, no UI tab). Ollama, Groq,
+Gemini, OpenAI and OpenRouter: set a key, pick models, test the connection,
+disconnect. A key set this way lives in process memory only - never in a log, an
+event row or a response - and an `ADMIN_TOKEN` (or `SECRET_KEY`) guards the
+write endpoints. Environment variables remain the durable path.
+
+**Knowledge workspace** (`knowledge` tab). Upload PDF, DOCX, PPTX, XLSX, TXT, MD,
+CSV and common code/text formats. Files are validated by magic bytes, chunked on
+paragraph boundaries and indexed in memory per workspace (not persisted - the
+UI says so). Retrieval is **hybrid**: BM25 keyword search and a semantic leg
+(sentence embeddings when `requirements-embeddings.txt` is installed, otherwise
+character n-gram TF-IDF - the API reports which one ran), merged with
+Reciprocal Rank Fusion, reranked by idf-weighted query coverage and adjacent-
+term matches, then de-duplicated. Chat turns retrieve automatically from your
+documents and cite them; every score is visible under "Test retrieval".
+
+**Model router.** Each question is scored per candidate on capability (the
+catalog's fit for the intent), cost and latency, weighted by how hard the
+question is and a `priority` (balanced / quality / speed / cost). "hi" no longer
+buys the strongest, slowest model; a deep audit does. The decision, with every
+candidate's components, is returned with each answer. The capability, cost and
+latency numbers are curated estimates (`backend/providers/catalog.py`), not live
+measurements.
+
+**Dynamic orchestration.** The council designs the workflow from the goal:
+branches may declare `depends_on`, so a build goal becomes a pipeline
+(plan -> implement -> review) while a comparison fans out in parallel. Cycles
+and unknown dependencies in model output are repaired in code. The fixed
+security/quality/docs team is now used only for code audits.
+
+**Execution trace.** Every agent's input, output, tools declared / called /
+blocked, duration, tokens, cost and status - in the orchestrator's `agents`
+tab (`GET /api/runs/{id}/trace`) and under each chat answer.
+
+---
+
 ## Architecture in one paragraph
 
 One append-only Postgres table is the single source of truth. Observability,
@@ -181,6 +219,10 @@ with `ollama list`. Not required otherwise - it is not on the default path.
 | `OLLAMA_API_KEY` | Cloud only | — | Required for Ollama Cloud; must be absent for an unauthenticated local instance |
 | `OLLAMA_MODELS` | no | `llama3.2:3b,qwen2.5:7b` | Comma-separated tags, no `ollama:` prefix - local and `:cloud` tags are interchangeable |
 | `GROQ_API_KEY` | no | — | Additive - widens the council with a different model family when set |
+| `OPENAI_API_KEY` | no | — | Additive - OpenAI models join the council and the router |
+| `GROQ_MODELS` / `GEMINI_MODELS` / `OPENAI_MODELS` / `OPENROUTER_MODELS` | no | one sensible model each (OpenRouter: none) | Comma-separated tags per provider - switching models is configuration, not code |
+| `ADMIN_TOKEN` | prod only | falls back to `SECRET_KEY` | Guards setting/clearing a provider key at runtime; refused in prod when neither is set |
+| `KNOWLEDGE_MAX_DOCS` / `KNOWLEDGE_MAX_CHUNKS` | no | `50` / `5000` | Per-workspace limits for uploaded documents |
 | `GEMINI_API_KEY` | no | — | Additive - widens the council with a different model family when set |
 | `OPENROUTER_API_KEY` | no | — | Not part of the default mix; reachable only by explicitly passing an `openrouter:model` spec in a request |
 | `MAX_CONCURRENT_MODEL_CALLS` | no | `4` | Caps simultaneous in-flight model calls across the council |
@@ -205,21 +247,45 @@ bundle.
 
 ## Deployment
 
-Split hosting, both free: the backend is a native-Python Render web service
-(no Docker, no `ollama` binary on the box - model calls go out to Ollama
-Cloud over HTTP), the frontend is a static Netlify site pointed at it via
-`VITE_API_BASE`.
+**Live on Vercel (free):** <https://unified-agentic-orchestrator.vercel.app>
+One project serves both halves: the built frontend as static files and the
+FastAPI app as a single Python function (`api/index.py`, routed by
+`vercel.json`). Same origin, so no `VITE_API_BASE` and no CORS setup.
 
-- **Backend** — Render reads `render.yaml` at the repo root directly
-  (New → Blueprint). Secrets you provide: `TURSO_DATABASE_URL`,
-  `TURSO_AUTH_TOKEN`, `SECRET_KEY`, `OLLAMA_API_KEY`, `FRONTEND_ORIGIN`, and
-  optionally `GROQ_API_KEY` / `GEMINI_API_KEY`. Everything else is already in
-  the file.
-- **Frontend** — Netlify reads `frontend/netlify.toml`. Base directory
-  `frontend`, build `npm run build`, publish `dist`. Set `VITE_API_BASE` to
-  the deployed backend's URL.
-- A free Render web service sleeps after 15 minutes idle and takes about a
-  minute to wake on the next request - expected, not a bug.
+```bash
+npm i -g vercel && vercel login
+vercel deploy --prod          # from the repo root
+```
+
+Set secrets in the Vercel dashboard (Project -> Settings -> Environment
+Variables), not in the repo: at least one model provider (`OLLAMA_BASE_URL` +
+`OLLAMA_API_KEY`, or `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY`), and
+optionally `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` for the event log. An
+`ADMIN_TOKEN` is already set on the deployed project; it guards the "set a key
+from the UI" endpoints. Vercel's Deployment Protection is on by default for new
+projects, so the URL asks for a Vercel login until you switch it off in
+Settings -> Deployment Protection.
+
+**What works on a serverless function, and what does not** - a function is not a
+process that stays up between requests:
+
+| Works on Vercel | Needs a persistent host |
+|---|---|
+| Chat: routing, council fanout, streamed answers (up to 300 s per request) | Orchestrator runs (`POST /api/runs`): execution continues in a background task after the response, which a function does not keep alive |
+| Provider management, model router, execution trace of a chat turn | Pause / resume / cancel of an in-flight run |
+| Knowledge workspace upload + hybrid retrieval | Knowledge documents surviving between instances or restarts (in memory, per instance) |
+
+For the full orchestrator, run the backend on a persistent host: `render.yaml`
+defines a free Render web service (sleeps after 15 min idle, ~1 min cold start)
+and `frontend/netlify.toml` a static Netlify site pointed at it via
+`VITE_API_BASE`. Firebase's free Spark plan cannot run this backend at all
+(no Python runtime without billing), so it is not a target.
+
+Notes learned deploying: `vercel.json` sets `"framework": null` - without it
+Vercel auto-detects FastAPI (and reads `render.yaml` as a "services" config),
+which conflicts with the static-plus-function layout. `api/requirements.txt`
+holds the runtime-only dependencies so the function bundle stays ~60 MB (the
+root `requirements.txt` also carries `datasets` and the dev tools).
 
 ---
 

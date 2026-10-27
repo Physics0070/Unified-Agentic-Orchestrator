@@ -21,6 +21,7 @@ from slowapi.util import get_remote_address
 from backend import __version__
 from backend.api import router as api_router
 from backend.config import settings
+from backend.events import EventStoreError
 from backend.providers.base import ProviderAdapter
 
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -73,6 +74,17 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.exception_handler(EventStoreError)
+async def event_log_unavailable(request: Request, exc: EventStoreError) -> JSONResponse:
+    """The event log is down or unconfigured. Its message is written to be safe
+    (it never carries a key), and "set TURSO_*" is the actionable part - a
+    generic 500 hid it."""
+    log.warning("event log unavailable on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=503, content={"error": "event_log_unavailable", "message": str(exc)[:200]}
+    )
 
 
 @app.exception_handler(Exception)

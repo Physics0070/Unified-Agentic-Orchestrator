@@ -245,6 +245,7 @@ async def contribute(
                     "text": c.text, "tokens_in": c.tokens_in,
                     "tokens_out": c.tokens_out,
                     "used_fallback": c.used_fallback,
+                    "input": prompt[:2000],
                 }
             # An empty points list is a legitimate answer - the specialist is
             # saying its aspect does not apply - so accept it rather than
@@ -266,4 +267,4 @@ async def contribute(
 
     log.warning("specialist %s did not validate: %s", aspect_id, last_err)
     return {"aspect": aspect_id, "points": [], "error": last_err[:200],
-            "tokens": tokens, "latency_ms": latency}
+            "tokens": tokens, "latency_ms": latency, "input": prompt[:2000]}

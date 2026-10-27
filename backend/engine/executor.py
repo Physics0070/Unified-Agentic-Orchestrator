@@ -73,6 +73,7 @@ class Executor:
         approvals: set[str] | None = None,
         clarifications: dict | None = None,
         depth: int = 0,
+        goal: str = "",
     ) -> None:
         self.store = store
         self.graph = graph
@@ -82,6 +83,9 @@ class Executor:
         # Approval gates already granted for this run (the UI posts these).
         self.approvals = approvals or set()
         self.clarifications = clarifications or {}
+        # The user's goal. Agents used to get only their one-line role and their
+        # parents' outputs, so a root agent never knew what the run was for.
+        self.goal = goal
         self.outputs: dict[str, dict | list] = {}
         self.results: dict[str, NodeResult] = {}
         self.guard = CapabilityGuard(store, run_id)
@@ -155,6 +159,7 @@ class Executor:
         failed: list[str] = []
 
         for level in self.graph.levels():
+            await self._wait_while_paused()
             runnable = [n for n in level if self._should_run(n)]
             for n in level:
                 if n not in runnable:
@@ -187,6 +192,26 @@ class Executor:
 
         compensated = await self._compensate(failed)
         return failed, compensated
+
+    async def _wait_while_paused(self) -> None:
+        """Hold between levels while the run's status is "paused".
+
+        Pause used to log an event and flip a status nothing ever read, so the
+        run carried on. Checked between levels, not mid-node: a model call
+        already in flight is not abandoned. A store that cannot report status
+        (a test double) never pauses.
+        """
+        get_run = getattr(self.store, "get_run", None)
+        if get_run is None:
+            return
+        while True:
+            try:
+                row = await get_run(self.run_id)
+            except Exception:
+                return
+            if row is None or row.status != "paused":
+                return
+            await asyncio.sleep(1.0)
 
     # ------------------------------------------------------------- per node
 
@@ -261,7 +286,7 @@ class Executor:
             self.store, node.subgraph, self.run_id,
             seed=self.seed, completer=self.completer,
             approvals=self.approvals, clarifications=self.clarifications,
-            depth=self.depth + 1,
+            depth=self.depth + 1, goal=self.goal,
         )
         parent_ctx = self._upstream_context(node.id)
         if parent_ctx:
@@ -322,7 +347,8 @@ class Executor:
         started = time.perf_counter()
         await self.store.append(
             self.run_id, EventType.NODE_START, node_id=node.id, agent_id=agent.id,
-            payload={"model": agent.model, "budget_tokens": agent.budget_tokens},
+            payload={"model": agent.model, "budget_tokens": agent.budget_tokens,
+                     "role": agent.role},
         )
 
         upstream = self._upstream_context(node.id)
@@ -350,7 +376,7 @@ class Executor:
         async def produce(feedback: str | None):
             messages = [
                 {"role": "system", "content": agent.system_contract},
-                {"role": "user", "content": _render(clean, agent)},
+                {"role": "user", "content": _render(clean, agent, self.goal)},
             ]
             if feedback:
                 messages.append({"role": "user", "content": feedback})
@@ -375,6 +401,8 @@ class Executor:
                     "used_fallback": c.used_fallback,
                     "replayed": c.replayed,
                     "text": c.text,
+                    # What the agent was shown, for the execution trace.
+                    "input": messages[1]["content"][:2000],
                 },
                 tokens_in=c.tokens_in, tokens_out=c.tokens_out,
                 cost_usd=c.cost_usd, latency_ms=c.latency_ms,
@@ -518,13 +546,14 @@ class Executor:
         )
 
 
-def _render(context: dict, agent) -> str:
+def _render(context: dict, agent, goal: str = "") -> str:
     import json
 
+    head = f"Overall goal: {goal}\n\n" if goal else ""
     if not context:
-        return f"Task: {agent.role}\n\nProduce output matching your declared schema."
+        return f"{head}Your task: {agent.role}\n\nProduce output matching your declared schema."
     return (
-        f"Task: {agent.role}\n\nUpstream results:\n"
+        f"{head}Your task: {agent.role}\n\nUpstream results:\n"
         f"{json.dumps(context, indent=2)[:4000]}\n\n"
         "Produce output matching your declared schema."
     )

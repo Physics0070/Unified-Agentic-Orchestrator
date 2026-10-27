@@ -65,7 +65,8 @@ async def run_at_depth(
 
     approvals = {n.id for n in graph.nodes if n.type == "approval"}
     result = await Executor(
-        store, graph, run_id, seed=seed, completer=completer, approvals=approvals
+        store, graph, run_id, seed=seed, completer=completer, approvals=approvals,
+        goal=goal,
     ).run()
     m = await compute(store, run_id)
 

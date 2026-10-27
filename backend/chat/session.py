@@ -10,6 +10,7 @@ took the fast path rather than inventing council numbers.
 """
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -26,7 +27,10 @@ from backend.chat.planner import Plan, pick_planner_model, plan_for
 from backend.engine.spec import AgentSpec, Edge, GraphSpec, Node
 from backend.events import EventStore, EventType
 from backend.providers.catalog import rank_models
+from backend.providers.router import route_model
 from backend.providers.websearch import needs_fresh_data, render_results, web_search
+from backend.rag import knowledge_base, render_context
+from backend.trace import new_step
 
 log = logging.getLogger("aco.chat")
 
@@ -104,6 +108,34 @@ def chat_graph(plan: Plan, models: list[str]) -> GraphSpec:
     return GraphSpec(version=1, nodes=nodes, edges=edges).finalize()
 
 
+def _trace(plan: Plan, plan_ms: int, contributions: list[dict], ranked: list,
+           answer_model: str, total_ms: int, fanout_ms: int, answer: str) -> list[dict]:
+    """The turn as execution-trace steps, built from what actually happened so
+    the trace works even when the event log is unavailable."""
+    steps = [new_step(
+        "plan", type="plan", status="done", duration_ms=plan_ms,
+        output=f"{plan.intent} / {plan.complexity}: {plan.rationale}"[:600])]
+    specs = {s.id: s for s in plan.specialists}
+    for i, c in enumerate(contributions):
+        failed = bool(c.get("error"))
+        steps.append(new_step(
+            c["aspect"], type="agent", role=getattr(specs.get(c["aspect"]), "role", None),
+            model=c.get("model") or ranked[i % len(ranked)][0],
+            status="failed" if failed else "done", error=c.get("error"),
+            duration_ms=c.get("latency_ms"), depends_on=["plan"],
+            input=c.get("input"),
+            output=None if failed else json.dumps(c.get("points") or [], indent=1)[:1600],
+            tokens=c.get("tokens") or 0, tokens_in=c.get("tokens_in", 0),
+            tokens_out=c.get("tokens_out", 0), cost_usd=c.get("cost_usd", 0.0),
+            repairs=1 if c.get("repaired") else 0,
+            used_fallback=bool(c.get("used_fallback"))))
+    steps.append(new_step(
+        "answer", type="answer", status="done", model=answer_model,
+        depends_on=[c["aspect"] for c in contributions] or ["plan"],
+        duration_ms=max(total_ms - plan_ms - fanout_ms, 0), output=answer[:1600]))
+    return steps
+
+
 def _mig(contributions: list[dict]) -> dict:
     """How much each specialist added that the others did not.
 
@@ -152,6 +184,9 @@ async def run_turn(
     store: EventStore | None = None,
     force_web_search: bool = False,
     forced_model: str | None = None,
+    priority: str = "balanced",
+    workspace_id: str | None = None,
+    use_knowledge: bool = True,
 ) -> AsyncIterator[dict]:
     """Yield `{"event": ..., "data": ...}` for the whole turn.
 
@@ -179,6 +214,7 @@ async def run_turn(
     # this exact ranking.
     fan_models = specialist_models(models)
     ranked = rank_models(fan_models, plan.intent)
+    decision = None
     if forced_model and forced_model in models:
         # The user picked which model answers - leave specialist assignment on
         # auto below; forcing the whole council to one model would defeat the
@@ -188,11 +224,16 @@ async def run_turn(
         fallback_candidates = [m for m, _ in ranked if m != forced_model]
         answer_fallback = fallback_candidates[0] if fallback_candidates else None
     else:
-        answer_model, answer_model_reason = ranked[0]
-        # A provider failure (rate limit, 5xx) on the top pick falls back to the
-        # next-best ranked model rather than surfacing "the answer stream failed"
-        # to the user - see backend/chat/answer.py's stream_direct/stream_synthesis.
-        answer_fallback = ranked[1][0] if len(ranked) > 1 else None
+        # The router weighs capability against cost and latency for this
+        # question's difficulty and the user's priority (backend/providers/
+        # router.py); a greeting no longer buys the strongest, slowest model.
+        # A provider failure (rate limit, 5xx) on the pick falls back to the
+        # next-best routed model rather than surfacing "the answer stream
+        # failed" - see backend/chat/answer.py's stream_direct/stream_synthesis.
+        decision = route_model(fan_models, plan.intent, plan.complexity, priority)
+        answer_model, answer_model_reason = decision.model, decision.reason
+        others = [m for m in decision.ranked_models if m != answer_model]
+        answer_fallback = others[0] if others else None
     model_choices = [
         {"id": s.id, "role": s.role, "model": ranked[i % len(ranked)][0],
          "reason": ranked[i % len(ranked)][1]}
@@ -216,6 +257,7 @@ async def run_turn(
         "model_choices": model_choices,
         "answer_model": answer_model,
         "answer_model_reason": answer_model_reason,
+        "routing": decision.model_dump() if decision else None,
         # The graph was already being built for replay provenance - sending it
         # here too is what lets the UI draw this turn's workflow instead of
         # only knowing its hash. Nodes/edges only; locked/config_hash carry no
@@ -244,6 +286,25 @@ async def run_turn(
             log.warning("event log unavailable, continuing without it: %s", e)
             store = None
 
+    # ---------- knowledge ----------
+    # Retrieval is folded into the question text, exactly like web search below:
+    # whatever text the answer was built from is what gets stored and replayed.
+    kb: dict = {"used": False, "semantic_backend": None, "hits": []}
+    spec_question = question
+    if use_knowledge and workspace_id:
+        try:
+            ws = knowledge_base.get(workspace_id, create=False)
+            if ws is not None and ws.docs:
+                yield {"event": "status", "data": {"stage": "retrieving"}}
+                found = await asyncio.to_thread(ws.search, question, top_k=4)
+                if found["hits"]:
+                    spec_question = f"{question}\n\n{render_context(found['hits'])}"
+                    kb = {"used": True, "semantic_backend": found["semantic_backend"],
+                          "hits": [{"doc_name": h["doc_name"], "ordinal": h["ordinal"],
+                                    "score": h["score"]} for h in found["hits"]]}
+        except Exception as e:
+            log.warning("knowledge retrieval failed, continuing without it: %s", e)
+
     # ---------- specialists ----------
     contributions: list[dict] = []
     fanout_ms = 0
@@ -266,7 +327,7 @@ async def run_turn(
         # so the graph's stated model per specialist matches what actually ran.
         contributions = await asyncio.gather(*[
             _bounded(
-                contribute(question, s.id, s.role,
+                contribute(spec_question, s.id, s.role,
                            ranked[i % len(ranked)][0], seed=seed,
                            fallback_model=ranked[(i + 1) % len(ranked)][0]
                            if len(ranked) > 1 else None),
@@ -302,7 +363,8 @@ async def run_turn(
                     "cost_usd": c.get("cost_usd", 0.0), "latency_ms": c.get("latency_ms"),
                     "payload": {"model": c.get("model", ""),
                                 "used_fallback": c.get("used_fallback", False),
-                                "replayed": False, "text": c.get("text", "")},
+                                "replayed": False, "text": c.get("text", ""),
+                                "input": c.get("input")},
                 })
                 # The validated handoff is what a replay diff compares.
                 # Without it the original run has no recorded outputs and
@@ -338,14 +400,14 @@ async def run_turn(
     # and touching it risks the 34s->4s latency fix from last session) and the
     # replay path completely unchanged - whatever text the answer was built
     # from is exactly what gets stored and replayed.
-    answer_question = question
+    answer_question = spec_question
     search_results: list[dict] = []
     if force_web_search or needs_fresh_data(question):
         try:
             search_results = await web_search(question)
             web_context = render_results(search_results)
             if web_context:
-                answer_question = f"{question}\n\n{web_context}"
+                answer_question = f"{answer_question}\n\n{web_context}"
         except Exception as e:
             log.warning("web search failed, continuing without it: %s", e)
     chunks: list[str] = []
@@ -428,6 +490,10 @@ async def run_turn(
             "used": bool(search_results),
             "sources": [{"title": r["title"], "url": r["url"]} for r in search_results],
         },
+        "knowledge": kb,
+        "routing": decision.model_dump() if decision else None,
+        "trace": _trace(plan, plan_ms, contributions, ranked, answer_model, total_ms, fanout_ms,
+                        answer),
     }
 
     # Neither `bench` nor the final answer depends on the store writes below -

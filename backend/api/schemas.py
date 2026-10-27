@@ -1,5 +1,7 @@
 """Request models. Every endpoint validates and rejects; nothing sanitizes-and-continues."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 from backend.engine.spec import GraphSpec
@@ -9,7 +11,7 @@ MAX_GOAL = 2000
 
 class GoalRequest(BaseModel):
     goal: str = Field(min_length=10, max_length=MAX_GOAL)
-    models: list[str] = Field(default_factory=list, max_length=6)
+    models: list[str] = Field(default_factory=list, max_length=10)
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
     chairman_policy: str = Field(default="strongest", max_length=64)
 
@@ -66,12 +68,18 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=MAX_GOAL)
     history: list[ChatMessage] = Field(default_factory=list, max_length=40)
-    models: list[str] = Field(default_factory=list, max_length=6)
+    models: list[str] = Field(default_factory=list, max_length=10)
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
     # User-driven overrides on top of the automatic routing. None/False leaves
     # everything on auto - same behavior as before either field existed.
     force_web_search: bool = False
     forced_model: str | None = Field(default=None, max_length=128)
+    # What the model router optimises for (see backend/providers/router.py).
+    priority: Literal["balanced", "quality", "speed", "cost"] = "balanced"
+    # Which uploaded-documents workspace to retrieve from. None or no uploads
+    # means no retrieval, same as before the knowledge workspace existed.
+    workspace_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    use_knowledge: bool = True
 
     @field_validator("message")
     @classmethod
@@ -104,7 +112,7 @@ class ApprovalRequest(BaseModel):
 class MarginalValueRequest(BaseModel):
     goal: str = Field(min_length=10, max_length=MAX_GOAL)
     depths: list[int] = Field(default=[1, 2, 3, 4], max_length=4)
-    models: list[str] = Field(default_factory=list, max_length=6)
+    models: list[str] = Field(default_factory=list, max_length=10)
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
 
     @field_validator("depths")
@@ -113,3 +121,27 @@ class MarginalValueRequest(BaseModel):
         if any(d < 1 or d > 4 for d in v):
             raise ValueError("depth must be between 1 and 4")
         return v
+
+
+class ProviderUpdate(BaseModel):
+    api_key: str | None = Field(default=None, max_length=512)
+    base_url: str | None = Field(default=None, max_length=300)
+    models: list[str] | None = Field(default=None, max_length=8)
+
+
+class ProviderTest(BaseModel):
+    model: str | None = Field(default=None, max_length=120)
+
+
+class KnowledgeQuery(BaseModel):
+    workspace_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    query: str = Field(min_length=1, max_length=1000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    mode: Literal["hybrid", "keyword", "semantic"] = "hybrid"
+    rerank: bool = True
+
+
+class RouterExplain(BaseModel):
+    message: str = Field(min_length=1, max_length=MAX_GOAL)
+    priority: Literal["balanced", "quality", "speed", "cost"] = "balanced"
+    models: list[str] = Field(default_factory=list, max_length=10)

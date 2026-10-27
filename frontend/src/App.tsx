@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   api, streamEvents,
   type CouncilSummary, type DnaPredictedPayload, type GraphSpec, type LogEvent,
-  type MarginalValueReport, type ReplayDiff, type RunMetrics, type RunOutput,
+  type MarginalValueReport, type ReplayDiff, type RunMetrics, type RunOutput, type TraceStep,
 } from './api'
 import { ChatPanel } from './ChatPanel'
 import { ClarifyPanel, type Clarification } from './ClarifyPanel'
@@ -22,6 +22,8 @@ import { Badge, Button, Empty, fitnessTone, Icon, Panel, SkeletonRows, StepRail 
 // boundary for no bundle-size benefit.
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
 const TraceViewer = lazy(() => import('./TraceViewer').then((m) => ({ default: m.TraceViewer })))
+const ExecutionTrace = lazy(() => import('./TracePanel').then((m) => ({ default: m.ExecutionTrace })))
+const KnowledgePanel = lazy(() => import('./KnowledgePanel').then((m) => ({ default: m.KnowledgePanel })))
 const WorkflowDNAPanel = lazy(() =>
   import('./WorkflowDNAPanel').then((m) => ({ default: m.WorkflowDNAPanel })),
 )
@@ -56,7 +58,7 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<'trace' | 'metrics' | 'dna'>('trace')
+  const [tab, setTab] = useState<'trace' | 'agents' | 'metrics' | 'dna'>('trace')
   // Chat is the default surface: the product answers questions, and the
   // orchestrator view explains how. The view lives in the URL (#app/usage) so
   // a refresh or a shared link lands where you were.
@@ -65,6 +67,7 @@ export default function App() {
     history.replaceState(null, '', `#app/${v}`)
     setMode(v)
   }, [])
+  const [steps, setSteps] = useState<TraceStep[]>([])
   const { settings, patch, reset } = useSettings()
   const { runs, upsert, dropOutput, clear } = useRuns()
   const [repo, setRepo] = usePersisted<string | null>('aco.github.repo', null)
@@ -132,6 +135,17 @@ export default function App() {
 
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+
+  // Per-agent trace: poll while the run is live, then once more when it ends.
+  useEffect(() => {
+    if (tab !== 'agents' || !runId) return
+    let dead = false
+    const load = () => api.trace(runId).then((t) => { if (!dead) setSteps(t.steps) }).catch(() => {})
+    load()
+    if (!live) return () => { dead = true }
+    const id = setInterval(load, 2000)
+    return () => { dead = true; clearInterval(id) }
+  }, [tab, runId, live])
 
   const guard = useCallback(async (label: string, fn: () => Promise<void>) => {
     setBusy(label); setError(null)
@@ -354,6 +368,14 @@ export default function App() {
         </main>
       )}
 
+      {mode === 'knowledge' && (
+        <main className="flex-1 min-h-0">
+          <Suspense fallback={<SkeletonRows n={8} />}>
+            <KnowledgePanel />
+          </Suspense>
+        </main>
+      )}
+
       {/* ----------------------------------------------------------- alerts */}
       {mode === 'orchestrator' && error && (
         <div
@@ -436,10 +458,12 @@ export default function App() {
         </Panel>
 
         <Panel
-          title={tab === 'trace' ? 'Live trace' : tab === 'metrics' ? 'Honest metrics' : 'Workflow DNA'}
+          title={tab === 'trace' ? 'Live trace' : tab === 'agents' ? 'Agent trace' : tab === 'metrics' ? 'Honest metrics' : 'Workflow DNA'}
           subtitle={
             tab === 'trace'
               ? runId ? `${events.length} events` : undefined
+              : tab === 'agents'
+              ? runId ? `${steps.length} steps` : undefined
               : tab === 'metrics'
               ? metrics ? `${metrics.agents.length} agents measured` : undefined
               : runId ? 'predicts, then remembers' : undefined
@@ -447,7 +471,7 @@ export default function App() {
           className="min-h-[340px]"
           right={
             <div className="flex gap-0.5 p-0.5 rounded-lg bg-[var(--color-surface-2)]">
-              {(['trace', 'metrics', 'dna'] as const).map((t) => (
+              {(['trace', 'agents', 'metrics', 'dna'] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -470,6 +494,10 @@ export default function App() {
                   events={events} live={live} graph={graph}
                   selected={selected} onSelect={setSelected}
                 />
+          ) : tab === 'agents' ? (
+            runId
+              ? <ExecutionTrace steps={steps} live={live} />
+              : <Empty icon="◆" title="No run yet">Run a graph to see per-agent steps.</Empty>
           ) : tab === 'dna' ? (
             <WorkflowDNAPanel events={events} runId={runId} />
           ) : busy === 'marginal' ? (

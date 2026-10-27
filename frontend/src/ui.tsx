@@ -195,6 +195,7 @@ export function SkeletonRows({ n = 5 }: { n?: number }) {
 const ICONS = {
   graph: <><circle cx="12" cy="5" r="2" /><circle cx="5" cy="19" r="2" /><circle cx="19" cy="19" r="2" /><path d="M12 7v4M12 11 5 17M12 11l7 6" /></>,
   chat: <path d="M4 5h16v11H9l-5 4V5Z" />,
+  book: <path d="M5 4h10a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4V4ZM5 16a4 4 0 0 1 4-4h10" />,
   box: <path d="M12 3 4 7v10l8 4 8-4V7l-8-4ZM4 7l8 4 8-4M12 11v10" />,
   chart: <path d="M5 20V10M12 20V4M19 20v-7" />,
   merge: <><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="14" r="2" /><path d="M6 8v8M6 8c0 4 4 6 10 6" /></>,

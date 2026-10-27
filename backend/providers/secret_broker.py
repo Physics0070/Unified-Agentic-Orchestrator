@@ -14,7 +14,16 @@ place they could leak from.
 import os
 from dataclasses import dataclass, field
 
+from dotenv import find_dotenv, load_dotenv
+
 from backend.config import settings
+
+# Keys are read from os.environ below, but a `.env` file is only parsed into
+# `settings` (pydantic-settings never exports it) - so a key written in `.env`
+# was invisible here: the provider showed as unconfigured, or Ollama Cloud was
+# called with no auth header. Load it into the environment, cwd-relative like
+# the settings' own env_file; a real environment variable still wins.
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 # `repr=False` on the secret field: a stray f-string or traceback that prints a
@@ -41,7 +50,7 @@ class ProviderHandle:
         """
         if not self._secret:
             return {}
-        if self.provider in ("groq", "openrouter", "ollama"):
+        if self.provider in ("groq", "openrouter", "ollama", "openai"):
             return {"Authorization": f"Bearer {self._secret}"}
         if self.provider == "gemini":
             return {"x-goog-api-key": self._secret}
@@ -54,6 +63,7 @@ class ProviderHandle:
 
 
 _SPEC = {
+    "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
     "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
     "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1"),
     "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"),
@@ -63,10 +73,56 @@ _SPEC = {
 }
 
 
+# Keys and endpoints supplied at runtime through the provider-management API.
+# Process-local on purpose: they live in memory only, never reach a log line or
+# an event payload, and vanish on restart. A key from the environment is the
+# durable path; this is for "I pasted a key into the UI" without a redeploy.
+_RUNTIME_KEYS: dict[str, str] = {}
+_RUNTIME_BASE_URLS: dict[str, str] = {}
+
+
+def known_providers() -> list[str]:
+    return list(_SPEC)
+
+
+def set_runtime_key(provider: str, key: str) -> None:
+    if provider not in _SPEC:
+        raise ValueError(f"unknown provider {provider!r}")
+    key = key.strip()
+    if not 8 <= len(key) <= 512 or any(c.isspace() for c in key):
+        raise ValueError("that does not look like an API key")
+    _RUNTIME_KEYS[provider] = key
+
+
+def clear_runtime_key(provider: str) -> None:
+    _RUNTIME_KEYS.pop(provider, None)
+    _RUNTIME_BASE_URLS.pop(provider, None)
+
+
+def set_runtime_base_url(provider: str, url: str) -> None:
+    """Only Ollama has a user-chosen endpoint (cloud vs. local vs. tunnelled)."""
+    if provider != "ollama":
+        raise ValueError("only the ollama endpoint can be changed")
+    url = url.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")) or len(url) > 300:
+        raise ValueError("base URL must be http(s)")
+    _RUNTIME_BASE_URLS[provider] = url
+
+
+def key_source(provider: str) -> str | None:
+    """Where the active credential comes from: "runtime", "env" or None. Never
+    the value itself."""
+    if provider in _RUNTIME_KEYS:
+        return "runtime"
+    env_key, _ = _SPEC[provider]
+    return "env" if os.environ.get(env_key) else None
+
+
 def get_handle(provider: str) -> ProviderHandle:
     if provider not in _SPEC:
         raise ValueError(f"unknown provider {provider!r}")
     env_key, default_url = _SPEC[provider]
+    secret = _RUNTIME_KEYS.get(provider) or os.environ.get(env_key) or None
 
     if provider == "ollama":
         # Base URL is not a secret, so it comes from settings (backend.config
@@ -74,10 +130,10 @@ def get_handle(provider: str) -> ProviderHandle:
         # here. Falls back to localhost only when unset - config.py's prod
         # validator refuses to boot with it blank in prod, so this fallback
         # only ever fires in dev.
-        base_url = settings.ollama_base_url or default_url
-        return ProviderHandle(provider, base_url, os.environ.get(env_key) or None)
+        base_url = _RUNTIME_BASE_URLS.get(provider) or settings.ollama_base_url or default_url
+        return ProviderHandle(provider, base_url, secret)
 
-    return ProviderHandle(provider, default_url, os.environ.get(env_key) or None)
+    return ProviderHandle(provider, default_url, secret)
 
 
 def configured_providers() -> list[str]:
@@ -88,9 +144,7 @@ def configured_providers() -> list[str]:
 def assert_no_key_in(text: str) -> None:
     """Guard for the event-log write path: refuse to persist a payload that
     contains a live key. Cheap, and it turns a silent leak into a crash."""
-    for env_key, _ in _SPEC.values():
-        if not env_key:
-            continue
-        secret = os.environ.get(env_key)
-        if secret and len(secret) > 8 and secret in text:
-            raise RuntimeError(f"refusing to persist payload containing {env_key}")
+    for provider, (env_key, _) in _SPEC.items():
+        for secret in (os.environ.get(env_key), _RUNTIME_KEYS.get(provider)):
+            if secret and len(secret) > 8 and secret in text:
+                raise RuntimeError(f"refusing to persist payload containing {env_key}")
