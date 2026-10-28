@@ -98,10 +98,12 @@ class EventStore:
         def _open_sqlite():
             try:
                 Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-                c = sqlite3.connect(self._path, check_same_thread=False, timeout=30)
-                c.execute("PRAGMA journal_mode = WAL")
-                c.execute("PRAGMA foreign_keys = ON")
+                # The WAL switch needs an exclusive lock too, so a first open racing
+                # another one fails "database is locked" - serialise the whole setup.
                 with _MIGRATE_LOCK:
+                    c = sqlite3.connect(self._path, check_same_thread=False, timeout=30)
+                    c.execute("PRAGMA journal_mode = WAL")
+                    c.execute("PRAGMA foreign_keys = ON")
                     if self._path not in _MIGRATED:
                         c.executescript(_MIGRATION.read_text())
                         _MIGRATED.add(self._path)
