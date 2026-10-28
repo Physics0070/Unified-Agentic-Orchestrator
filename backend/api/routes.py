@@ -10,6 +10,7 @@ import uuid
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
 from sse_starlette.sse import EventSourceResponse
 
+from backend import budget
 from backend.api.schemas import (
     ApprovalRequest,
     ChatRequest,
@@ -29,6 +30,7 @@ from backend.engine import Executor, GraphSpec
 from backend.engine.migrations import migrate
 from backend.events import EventStore, EventType
 from backend.handoff import artifact_store
+from backend.limiter import limiter
 from backend.permissions.red_agent import red_agent_graph
 from backend.providers import manage
 from backend.providers.secret_broker import configured_providers, known_providers
@@ -184,7 +186,9 @@ async def knowledge_documents(workspace_id: str) -> dict:
 
 
 @router.post("/knowledge/upload")
-async def knowledge_upload(workspace_id: str = Form(...), file: UploadFile = File(...),  # noqa: B008
+@limiter.limit(lambda: f"{settings.rate_upload_per_min}/minute")
+async def knowledge_upload(request: Request, workspace_id: str = Form(...),
+                           file: UploadFile = File(...),  # noqa: B008
 ) -> dict:
     name = (file.filename or "upload").replace("\\", "/").rsplit("/", 1)[-1][:120]
     data = await file.read(settings.max_upload_bytes + 1)
@@ -235,7 +239,14 @@ async def models_catalog() -> dict:
     return {"models": out}
 
 
+@router.get("/usage")
+async def usage() -> dict:
+    """Today's (UTC) model usage against the daily cap. Read-only."""
+    return budget.usage()
+
+
 @router.post("/chat")
+@limiter.limit(lambda: f"{settings.rate_chat_per_min}/minute")
 async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
     """Ask anything, get an answer. SSE so the answer streams like a chat should.
 
@@ -245,6 +256,7 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
     """
     from backend.chat import run_turn
 
+    budget.ensure_available()
     models_ = _require_models(req.models or await _default_models())
     history = [m.model_dump() for m in req.history]
 
@@ -266,6 +278,8 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
                 if await request.is_disconnected():
                     return
                 yield {"event": evt["event"], "data": json.dumps(evt["data"], default=str)}
+        except budget.DailyCapReached:
+            yield {"event": "error", "data": json.dumps({"error": "daily_cap_reached"})}
         except Exception as e:
             log.exception("chat turn failed")
             yield {"event": "error", "data": json.dumps({"detail": str(e)[:300]})}
@@ -341,8 +355,10 @@ async def clarify(req: GoalRequest) -> dict:
 
 
 @router.post("/compile")
-async def compile_endpoint(req: CompileRequest) -> dict:
+@limiter.limit(lambda: f"{settings.rate_runs_per_min}/minute")
+async def compile_endpoint(req: CompileRequest, request: Request) -> dict:
     """Council designs the graph. Not executed until /runs is called."""
+    budget.ensure_available()
     models_ = _require_models(req.models or await _default_models())
     async with EventStore() as store:
         run_id = str(uuid.uuid4())
@@ -389,7 +405,9 @@ async def compile_endpoint(req: CompileRequest) -> dict:
 
 
 @router.post("/runs")
-async def start_run(req: RunRequest) -> dict:
+@limiter.limit(lambda: f"{settings.rate_runs_per_min}/minute")
+async def start_run(req: RunRequest, request: Request) -> dict:
+    budget.ensure_available()
     # Migrate before reconstruction: a graph built or persisted under an older
     # schema version is walked forward to CURRENT_VERSION here, once, at the
     # point a *new* run starts from it. Replay never calls this - see

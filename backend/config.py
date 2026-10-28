@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     rate_limit_auth: str = "5/minute"
     rate_limit_public: str = "30/minute"
     rate_limit_authed: str = "120/minute"
+    # Per-IP limits on the endpoints that spend the paid model key.
+    rate_chat_per_min: int = Field(default=20, gt=0)
+    rate_runs_per_min: int = Field(default=5, gt=0)  # POST /runs and /compile
+    rate_upload_per_min: int = Field(default=10, gt=0)
+
+    # ---------- spend cap ----------
+    # Global tokens per UTC day across all model calls; 0 = unlimited.
+    daily_token_cap: int = Field(default=2_000_000, ge=0)
 
     @model_validator(mode="before")
     @classmethod

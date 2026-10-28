@@ -8,6 +8,7 @@ between providers - the graph, the schemas and the engine are untouched.
 import asyncio
 import logging
 
+from backend import budget
 from backend.config import settings
 from backend.events import EventStore, EventType
 from backend.providers.base import Completion, ProviderAdapter, ProviderError
@@ -76,6 +77,7 @@ async def complete(
     token counts, so cost and latency in the dashboard are measured, not
     estimated.
     """
+    budget.ensure_available()
     adapter, model = adapter_for(spec)
     try:
         async with _CALL_SLOTS:
@@ -129,6 +131,8 @@ async def complete(
                 json_mode=json_mode,
             )
         result.used_fallback = True
+
+    budget.record(result.tokens_in + result.tokens_out, result.cost_usd)
 
     # Deliberately does NOT write TOOL_RESULT. Replay depends on those rows, so
     # recording them is the engine's guarantee (see engine/executor.py) rather
