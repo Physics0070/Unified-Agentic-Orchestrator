@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import logging
+import os
 import uuid
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
@@ -429,6 +430,16 @@ async def start_run(req: RunRequest) -> dict:
                 await s.set_run_status(run_id, "failed", ended=True)
             finally:
                 _TASKS.pop(run_id, None)
+
+    if os.environ.get("VERCEL"):
+        # Serverless freezes the function once the response is sent, so a
+        # background task never finishes. Run inline (the function allows up to
+        # maxDuration); the run is already complete when the client polls it.
+        await _execute()
+        async with EventStore() as store:
+            row = await store.get_run(run_id)
+        return {"run_id": run_id, "config_hash": graph.config_hash,
+                "status": row.status if row else "failed"}
 
     _TASKS[run_id] = asyncio.create_task(_execute())
     return {"run_id": run_id, "config_hash": graph.config_hash, "status": "running"}
