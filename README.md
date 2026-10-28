@@ -1,355 +1,221 @@
 # Agent Council Orchestrator
 
-**CodeRush 2.0 · Problem statement AE-03 — Unified Agent Form Orchestrator**
-Team **Latency Zero** · VIT Pune
+An AI assistant that works like a small team. Ask it a question and it answers.
+Ask it something big and it splits the work between several AI "specialists",
+checks their work, and gives you one clear answer. Under every answer it shows
+what the answer cost in time, tokens and money.
 
-**Live:** <https://sprightly-salmiakki-bb8ed0.netlify.app/>
+**Try it live:** <https://unified-agentic-orchestrator.vercel.app>
 
-**Ask it anything and it answers, like any assistant. Then it shows you what
-the answer cost.**
-
-Simple questions go straight to one model and stream back in about two seconds.
-Harder ones are split across specialists that run in parallel, and the answers
-are merged into one reply. You get prose, not a findings table — and under every
-answer, the measured truth about how it was produced.
-
-For heavier work there is a second surface: type a goal, and the system asks
-clarifying questions, asks permission, designs an agent team as a visual graph,
-shows it for approval, executes it parallel-first, streams live state, and
-replays any past run with a provably identical result.
-
-Runs at **₹0** — Ollama Cloud's free tier answers by default, Groq and Gemini
-widen the council with a different model family each when configured, and
-persistence is Turso's free tier. The same Ollama adapter also talks to a
-local or tunnelled instance for development.
+Built for CodeRush 2.0 (problem AE-03, "Unified Agent Orchestrator") by team
+Latency Zero, VIT Pune.
 
 ---
 
-## What makes it different
+## What it does, in plain words
 
-**0. It decides how hard your question is, and spends accordingly.**
-A council of four is not free. The router reads what you actually asked and
-picks the cheapest shape that answers it well — most messages skip the council
-entirely. It also derives the specialists *from your question*: ask about
-locking in a ledger and you get `locking_strategies` and `ledger_architecture`,
-not a generic security/quality/docs template.
+There are two ways to use it.
 
-**1. Agents pass typed forms, not chat messages.**
-Every edge in the graph carries a JSON Schema. A wrong shape is rejected, the
-*exact* validator error goes back to the producing agent, and it retries. Like a
-hospital handover chart with required fields, not "the patient seems unwell."
+**1. Chat.** Type a question.
+- A simple question goes to one AI model and the answer streams back in a couple
+  of seconds.
+- A harder question is split across a few specialists that work at the same
+  time. Their answers are merged into one reply.
+- Under each answer you can open **benchmarks** to see which model answered,
+  how long it took, how many tokens it used and what it cost.
 
-**2. A council, not a single boss.**
-Several models each propose, then **peer-review each other anonymously** and
-rank. A chairman merges. Authorship is stripped before ranking — a reviewer
-shown "proposal by qwen2.5" rates the label, not the content.
-
-**3. It reports when it is overkill.**
-We measure whether more agents actually helped, and say so when they did not.
-An agent scoring MIG below 0.1 produced nothing the others did not already have,
-and the system names it out loud.
+**2. Orchestrator.** For bigger jobs, type a goal such as *"Compare REST and
+GraphQL for a mobile app backend"*. The app then:
+1. asks you a few clarifying questions,
+2. asks your permission,
+3. designs a team of AI agents and draws it as a graph,
+4. waits for you to approve,
+5. runs the agents (in parallel where it can),
+6. shows live progress, and
+7. lets you replay any past run and get the same result.
 
 ---
 
-## Workspace features
+## Main features
 
-**Multi-provider management** (`/api/providers`, no UI tab). Ollama, Groq,
-Gemini, OpenAI and OpenRouter: set a key, pick models, test the connection,
-disconnect. A key set this way lives in process memory only - never in a log, an
-event row or a response - and an `ADMIN_TOKEN` (or `SECRET_KEY`) guards the
-write endpoints. Environment variables remain the durable path.
-
-**Knowledge workspace** (`knowledge` tab). Upload PDF, DOCX, PPTX, XLSX, TXT, MD,
-CSV and common code/text formats. Files are validated by magic bytes, chunked on
-paragraph boundaries and indexed in memory per workspace (not persisted - the
-UI says so). Retrieval is **hybrid**: BM25 keyword search and a semantic leg
-(sentence embeddings when `requirements-embeddings.txt` is installed, otherwise
-character n-gram TF-IDF - the API reports which one ran), merged with
-Reciprocal Rank Fusion, reranked by idf-weighted query coverage and adjacent-
-term matches, then de-duplicated. Chat turns retrieve automatically from your
-documents and cite them; every score is visible under "Test retrieval".
-
-**Model router.** Each question is scored per candidate on capability (the
-catalog's fit for the intent), cost and latency, weighted by how hard the
-question is and a `priority` (balanced / quality / speed / cost). "hi" no longer
-buys the strongest, slowest model; a deep audit does. The decision, with every
-candidate's components, is returned with each answer. The capability, cost and
-latency numbers are curated estimates (`backend/providers/catalog.py`), not live
-measurements.
-
-**Dynamic orchestration.** The council designs the workflow from the goal:
-branches may declare `depends_on`, so a build goal becomes a pipeline
-(plan -> implement -> review) while a comparison fans out in parallel. Cycles
-and unknown dependencies in model output are repaired in code. The fixed
-security/quality/docs team is now used only for code audits.
-
-**Execution trace.** Every agent's input, output, tools declared / called /
-blocked, duration, tokens, cost and status - in the orchestrator's `agents`
-tab (`GET /api/runs/{id}/trace`) and under each chat answer.
+| Feature | What it means |
+|---|---|
+| **Smart routing** | Easy questions use one cheap, fast model. Hard ones use a team. A router scores each model on quality, cost and speed. |
+| **Knowledge workspace** | Upload PDF, Word, PowerPoint, Excel, text, Markdown or CSV files. Chat finds the relevant parts and uses them in its answer. Uploads are saved in the database. |
+| **Several AI providers** | Works with Groq, Gemini, OpenAI, OpenRouter and Ollama. You set a key and pick the models. |
+| **Typed hand-offs** | Agents pass each other structured forms, not loose chat. If a form is wrong, the exact error goes back and the agent tries again. |
+| **Council review** | Several models propose answers, review each other without seeing who wrote what, and a chairman merges the best. |
+| **Agent tools** | Agents can use a calculator, web search and a lookup in your uploaded documents. Only tools an agent is allowed to use can run. |
+| **Execution trace** | For every agent you can see its input, output, tools used, time, tokens, cost and status. |
+| **Replay** | Every action is written to an append-only log, so any run can be replayed and compared. |
+| **Safety limits** | Per-IP rate limits and a daily token cap protect your API key on a public site. |
 
 ---
 
-## Architecture in one paragraph
+## How it works (the short version)
 
-One append-only Postgres table is the single source of truth. Observability,
-replay, every metric, the trace viewer, pause/resume and the reproducibility
-report are all *reads* of that table. No state change happens anywhere without
-an event row.
+Everything the app does is saved as an **event** in one append-only table.
+Nothing can change without leaving a record. The trace, replay, metrics and
+pause/resume are all just different ways of reading that table.
 
 ```
-                        ┌─ simple ──▶ one model ─────────────────▶ answer
-question ─▶ router ─────┤
-                        └─ moderate/deep ─▶ fanout ─┬─▶ specialist ─┐
-                                                    ├─▶ specialist ─┼─▶ merge ─▶ answer
-                                                    └─▶ specialist ─┘
-                                                      (concurrent)
+Chat:
+  question -> router -+-> simple  -> one model ------------------> answer
+                      |
+                      +-> harder  -> specialists (in parallel) -> merge -> answer
 
-goal ─▶ clarify ─▶ approval ─▶ fanout ─┬─▶ analyst ─┐
-                                       ├─▶ analyst ─┼─▶ join ─▶ verify ─▶ report
-                                       └─▶ analyst ─┘
-                                        (concurrent)     (council)
+Orchestrator:
+  goal -> questions -> approval -> agent team (parallel) -> check -> report
 ```
 
-The specialists are named by the router from your question, not from a fixed
-list. Both paths write to the same event log, so a chat turn is as replayable
-and as measurable as a full orchestrated run.
-
-Full detail: [docs/architecture.md](docs/architecture.md).
+More detail: [docs/architecture.md](docs/architecture.md).
 
 ---
 
-## Setup
+## Run it on your own computer
 
-Prerequisites: **Python 3.11+**, **Node 20+**, an [Ollama Cloud](https://ollama.com)
-API key (or a local/tunnelled Ollama instance, no key needed), and a
-[Turso](https://turso.tech) database. Groq/Gemini keys are optional - they
-widen the council with a different model family each, but Ollama alone is a
-complete, working configuration.
+You need **Python 3.11+**, **Node 20+**, and a free [Turso](https://turso.tech)
+database. You also need at least one AI provider, for example a free
+[Groq](https://console.groq.com) key.
 
 ```bash
-git clone https://github.com/Physics0070/CodeRush2.0_Latency_Zero.git
-cd CodeRush2.0_Latency_Zero
+git clone https://github.com/Physics0070/Unified-Agentic-Orchestrator.git
+cd Unified-Agentic-Orchestrator
 
 # 1. Backend
 python3.11 -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Optional: semantic metrics (marginal information gain, duplicate detection).
-# ~1GB. Skip it and the app runs fully, reporting embeddings_available: false.
-pip install -r requirements-embeddings.txt \
-    --extra-index-url https://download.pytorch.org/whl/cpu
-
-# 2. Configuration
+# 2. Settings
 cp .env.example .env
-# fill in TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, and either OLLAMA_API_KEY
-# (Ollama Cloud) or nothing (local Ollama at the default localhost URL) -
-# the chat endpoint 503s naming the missing variable if no provider is
-# reachable. GROQ_API_KEY / GEMINI_API_KEY are additive, not required.
+# open .env and fill in TURSO_DATABASE_URL, TURSO_AUTH_TOKEN and GROQ_API_KEY
 
-# 3. Database
-turso db shell <db-name> < migrations/001_events.sql
+# 3. Create the database tables (run once)
+turso db shell <your-db-name> < migrations/001_events.sql
 
 # 4. Frontend
 cd frontend && npm install && npm run build && cd ..
 
-# 5. Run
-uvicorn backend.main:app --host 0.0.0.0 --port 7860
+# 5. Start
+uvicorn backend.main:app --port 7860
 ```
 
 Open <http://localhost:7860>.
 
-> Blank values in `.env` fall back to defaults, so `cp .env.example .env` boots
-> without editing anything except the Turso and model-provider keys.
+**No Turso account?** Leave `TURSO_DATABASE_URL` blank. The app then keeps its
+log in a local file (`data/events.db`). That is fine for trying it out, but the
+file is lost if the server's disk is wiped.
 
-### Troubleshooting
+### The main settings
 
-**`pip install` succeeded but the import still fails.** Almost always the wrong
-interpreter. If a newer Python is first on `PATH`, a bare `pip`/`python` installs
-there instead of into the venv. Check which one you are actually using:
+Put these in `.env` (or in your host's environment settings). Values are
+plain text with no quotes and no spaces around them.
 
-```bash
-.venv/Scripts/python -c "import sys; print(sys.executable, sys.version)"
-```
+| Setting | Needed? | What it is |
+|---|---|---|
+| `TURSO_DATABASE_URL` | recommended | Your database address, like `libsql://name.turso.io` |
+| `TURSO_AUTH_TOKEN` | with Turso | The database token |
+| `GROQ_API_KEY` | one provider needed | Groq key. Default model: `openai/gpt-oss-120b` |
+| `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | optional | More providers to widen the team |
+| `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` | optional | Ollama (local, or Ollama Cloud) |
+| `GROQ_MODELS`, `GEMINI_MODELS`, `OPENAI_MODELS` | optional | Choose models per provider, comma separated |
+| `ADMIN_TOKEN` | for public sites | Protects the "set a key from the UI" endpoints |
+| `DAILY_TOKEN_CAP` | optional | Most tokens the site may use per day (default 2,000,000, `0` = no limit) |
+| `MAX_UPLOAD_BYTES` | optional | Biggest file you can upload (default 5 MB) |
 
-Always install with `.venv/Scripts/python -m pip install …` rather than bare
-`pip`, so the interpreter and the target are the same by construction.
-
-**The torch install hangs.** `download.pytorch.org` is slow or blocked on some
-networks — we measured zero bytes in 120 seconds, and separately a 50-minute
-stall. Symptom: pip sits at "Collecting torch" with no progress bar movement.
-
-This is why torch is **not** in `requirements.txt`. It is optional:
-
-```bash
-# add explicit timeouts so pip gives up and retries instead of hanging
-pip install --retries 8 --timeout 60 -r requirements-embeddings.txt \
-    --extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-Torch is needed **only** for the two semantic metrics. Everything else — the
-chat, the event log, typed handoffs, the engine, the council, permissions,
-replay, the UI, and every timing and cost number — runs without it. Skip it and
-`/api/runs/{id}/metrics` still returns, with `embeddings_available: false` and
-marginal information gain and duplicate pairs omitted rather than guessed.
-
-Note the CPU index carries no cp311 linux wheel above 2.6.0, so
-`requirements-embeddings.txt` uses a range rather than an exact pin — a pin
-that resolves on Windows can be unsatisfiable in a linux container.
-
-**`ModuleNotFoundError: No module named 'backend'`.** Run from the repository
-root, not from inside `backend/`. `pytest` reads `pythonpath = ["."]` from
-`pyproject.toml`.
-
-**Ollama connection refused.** Only relevant if you are running local models
-for development. Start it (`ollama serve`) and confirm the models are present
-with `ollama list`. Not required otherwise - it is not on the default path.
-
-**Tests skip with "turso not configured".** `.env` is missing
-`TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN`, or the migration has not been applied.
-
-### Environment
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `TURSO_DATABASE_URL` | yes | — | Event log, runs, artifacts |
-| `TURSO_AUTH_TOKEN` | yes | — | Server-side only, never sent to the browser |
-| `LLM_PROVIDER` | prod only | — | Which provider `_default_models()` treats as primary; only `ollama` is implemented |
-| `OLLAMA_BASE_URL` | prod only | `http://localhost:11434` | `https://ollama.com` for Cloud, or a local/tunnelled URL |
-| `OLLAMA_API_KEY` | Cloud only | — | Required for Ollama Cloud; must be absent for an unauthenticated local instance |
-| `OLLAMA_MODELS` | no | `llama3.2:3b,qwen2.5:7b` | Comma-separated tags, no `ollama:` prefix - local and `:cloud` tags are interchangeable |
-| `GROQ_API_KEY` | no | — | Additive - widens the council with a different model family when set |
-| `OPENAI_API_KEY` | no | — | Additive - OpenAI models join the council and the router |
-| `GROQ_MODELS` / `GEMINI_MODELS` / `OPENAI_MODELS` / `OPENROUTER_MODELS` | no | one sensible model each (OpenRouter: none) | Comma-separated tags per provider - switching models is configuration, not code |
-| `ADMIN_TOKEN` | prod only | falls back to `SECRET_KEY` | Guards setting/clearing a provider key at runtime; refused in prod when neither is set |
-| `KNOWLEDGE_MAX_DOCS` / `KNOWLEDGE_MAX_CHUNKS` | no | `50` / `5000` | Per-workspace limits for uploaded documents |
-| `GEMINI_API_KEY` | no | — | Additive - widens the council with a different model family when set |
-| `OPENROUTER_API_KEY` | no | — | Not part of the default mix; reachable only by explicitly passing an `openrouter:model` spec in a request |
-| `MAX_CONCURRENT_MODEL_CALLS` | no | `4` | Caps simultaneous in-flight model calls across the council |
-| `MAX_REPAIR_ATTEMPTS` | no | `2` | Repair retries before a branch fails |
-| `DEFAULT_SEED` | no | `42` | Recorded per run; required for replay |
-| `DEFAULT_TEMPERATURE` | no | `0.0` | Passed to every provider call |
-| `DEFAULT_BUDGET_TOKENS` | no | `8000` | Engine-enforced, per agent |
-| `DEFAULT_TIMEOUT_S` | no | `60` | Engine-enforced, per agent |
-| `SECRET_KEY` | prod only | — | Prod refuses to boot without it |
-| `CORS_ORIGINS` | no | `http://localhost:5173` | Explicit allow-list; `*` is rejected |
-| `FRONTEND_ORIGIN` | prod only | — | Deployed frontend's exact origin; Netlify preview subdomains are matched separately by `.netlify.app` suffix |
-| `MAX_UPLOAD_BYTES` | no | `5242880` | Cap on a single uploaded file, in bytes |
-| `RATE_LIMIT_*` | no | see `.env.example` | No threshold is hardcoded |
-| `LOG_LEVEL` | no | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `PORT` | no | `7860` | Render sets this itself in prod; local-dev fallback only |
-
-Provider keys are read by **one module**, `backend/providers/secret_broker.py`.
-Nowhere else. They never enter a log line, an event payload, or the frontend
-bundle.
+Every setting, with its default, is listed in [.env.example](.env.example).
+API keys are read in one place only (`backend/providers/secret_broker.py`) and
+never appear in logs, events or the website code.
 
 ---
 
-## Deployment
+## Put it online
 
-**Live on Vercel (free):** <https://unified-agentic-orchestrator.vercel.app>
-One project serves both halves: the built frontend as static files and the
-FastAPI app as a single Python function (`api/index.py`, routed by
-`vercel.json`). Same origin, so no `VITE_API_BASE` and no CORS setup.
+**Vercel (free), what the live site uses.** One project serves the website and
+the API.
 
 ```bash
 npm i -g vercel && vercel login
-vercel deploy --prod          # from the repo root
+vercel deploy --prod
 ```
 
-Set secrets in the Vercel dashboard (Project -> Settings -> Environment
-Variables), not in the repo: at least one model provider (`OLLAMA_BASE_URL` +
-`OLLAMA_API_KEY`, or `GROQ_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY`), and
-optionally `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` for the event log. An
-`ADMIN_TOKEN` is already set on the deployed project; it guards the "set a key
-from the UI" endpoints. Vercel's Deployment Protection is on by default for new
-projects, so the URL asks for a Vercel login until you switch it off in
-Settings -> Deployment Protection.
+Then in the Vercel dashboard go to **Settings → Environment Variables** and add
+your Turso values and at least one provider key. Redeploy after changing them.
 
-**What works on a serverless function, and what does not** - a function is not a
-process that stays up between requests:
+What to expect on Vercel:
+- Chat, knowledge uploads, the router and orchestrator runs all work.
+- An orchestrator run finishes inside one request, so it must take less than
+  5 minutes. Pause, resume and cancel need a server that stays running.
+- Ollama on `localhost` is not available there, so use a cloud provider.
 
-| Works on Vercel | Needs a persistent host |
-|---|---|
-| Chat: routing, council fanout, streamed answers (up to 300 s per request) | Orchestrator runs (`POST /api/runs`): execution continues in a background task after the response, which a function does not keep alive |
-| Provider management, model router, execution trace of a chat turn | Pause / resume / cancel of an in-flight run |
-| Knowledge workspace upload + hybrid retrieval | Knowledge documents surviving between instances or restarts (in memory, per instance) |
+**Render or another always-on server.** `render.yaml` describes a free Render
+service. Use it if you need long runs or pause and resume. The free tier sleeps
+when idle and takes about a minute to wake up.
 
-For the full orchestrator, run the backend on a persistent host: `render.yaml`
-defines a free Render web service (sleeps after 15 min idle, ~1 min cold start)
-and `frontend/netlify.toml` a static Netlify site pointed at it via
-`VITE_API_BASE`. Firebase's free Spark plan cannot run this backend at all
-(no Python runtime without billing), so it is not a target.
-
-Notes learned deploying: `vercel.json` sets `"framework": null` - without it
-Vercel auto-detects FastAPI (and reads `render.yaml` as a "services" config),
-which conflicts with the static-plus-function layout. `api/requirements.txt`
-holds the runtime-only dependencies so the function bundle stays ~60 MB (the
-root `requirements.txt` also carries `datasets` and the dev tools).
+Firebase's free plan cannot run this backend, so it is not supported.
 
 ---
 
-## Running the demo
-
-### Chat (the default surface)
-
-1. Ask *"What is a race condition?"* → answers in ~2s, routed `simple`,
-   no council convened
-2. Ask *"Compare optimistic and pessimistic locking for a high-write ledger"* →
-   routed `moderate`, two specialists named from the question run in parallel,
-   answers merge into one reply
-3. Click **benchmarks** under either answer → route, timings, tokens, cost, and
-   the measured overlap between specialists
-
-The second question is the one to show: the system reports when its own
-specialists said the same thing, which is a claim nobody else's demo makes
-about itself.
-
-### Orchestrator (the `orchestrator` tab)
-
-1. Type: *"Audit this repository and produce a prioritized remediation report."*
-2. Answer the clarifying questions → approve
-3. Council compiles a graph — parallel branches and a verify node appear
-4. Inspect a node → lock → **Approve & run**
-5. Watch typed handoffs validate live in the trace
-6. Click **Red Agent** → `TOOL_BLOCKED` and `INJECTION_BLOCKED` in red
-7. Click **Replay** → diff is zero, cost compared side by side
-8. Click **Marginal value** → the system recommends a graph size
-
----
-
-## Verification
+## Check that it works
 
 ```bash
-pytest -v                    # full suite
-pytest -m "not slow"         # skips the live-model tests
-python -m backend.providers.smoke_test    # real completions + fallback
-python -m backend.benchmarks.show         # real SWE-bench + BFCL rows
-ruff check .
-pip-audit -r requirements.txt --strict
+pytest -q                    # all tests
+ruff check .                 # code style and security lint
+pip-audit -r requirements.txt --strict   # known vulnerabilities
 ```
 
----
-
-## Data
-
-| Source | Licence | Access |
-|---|---|---|
-| [SWE-bench Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified) | CC BY 4.0 | datasets-server API, real rows |
-| [BFCL](https://github.com/ShishirPatil/gorilla) | Apache 2.0 | JSONL — `load_dataset()` does **not** work |
-
-No sample record, finding, or metric in this repository is fabricated. Where a
-code path needs data we do not have, it raises rather than inventing.
+Some tests need a real Turso database and are skipped without one. GitHub
+Actions runs the tests, the linter, the audit and the frontend build on every
+pull request.
 
 ---
 
-## Documentation
+## Good to know (current limits)
 
-- [docs/architecture.md](docs/architecture.md) — event sourcing, node types, data model
-- [docs/threat-model.md](docs/threat-model.md) — capability enforcement, injection screening, secret broker
-- [docs/reproducibility.md](docs/reproducibility.md) — config_hash, seed, zero-diff worked example
-- [examples/](examples/) — saved runs: clean, recovered, adversarial
+- **No model key, no answers.** The site needs at least one provider key.
+- **Daily cap is per server process.** A restart resets the day's counter, so
+  treat it as a safety net rather than exact billing.
+- **Search quality.** Without the optional embeddings package
+  (`requirements-embeddings.txt`, about 1 GB) document search uses keyword and
+  character matching. It still works well, and the API says which method ran.
+- **Knowledge on Vercel.** Each server instance keeps a copy in memory after the
+  first load, so a fresh upload can take a moment to show on another instance.
+- **Router numbers are estimates.** The speed and cost scores for each model are
+  hand-written estimates in `backend/providers/catalog.py`, not live
+  measurements.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `ModuleNotFoundError: No module named 'backend'` | Run commands from the project root, not from inside `backend/`. |
+| Packages install but imports fail | You are using the wrong Python. Use `.venv/bin/python -m pip install ...`. |
+| Chat says "provider returned 404" | The model name is wrong or retired. Set `GROQ_MODELS` to a model your account lists. |
+| `/api/runs` returns 500 | Check `TURSO_AUTH_TOKEN`. A token pasted twice or with extra spaces breaks it (the app now uses the first copy). |
+| `503 event_log_unavailable` | No writable database. Set `TURSO_DATABASE_URL`, or use a writable `file:` path. |
+| Tests skip with "turso not configured" | `.env` has no Turso values, or the migration has not been run. |
+
+---
+
+## Data and honesty
+
+Test data comes from real public sets:
+[SWE-bench Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified)
+(CC BY 4.0) and [BFCL](https://github.com/ShishirPatil/gorilla) (Apache 2.0).
+No sample result in this repository is made up. Where data is missing, the code
+raises an error instead of inventing something.
+
+## More documentation
+
+- [docs/architecture.md](docs/architecture.md): events, node types, data model
+- [docs/threat-model.md](docs/threat-model.md): permissions, prompt-injection checks, key handling
+- [docs/reproducibility.md](docs/reproducibility.md): how replay gives identical results
+- [docs/deployment.md](docs/deployment.md): hosting notes
+- [examples/](examples/): saved runs (clean, recovered, attacked)
 
 ## Licence
 
-[Apache 2.0](LICENSE).
+[Apache 2.0](LICENSE)
