@@ -151,7 +151,11 @@ def test_run_finishes_inline_on_vercel(monkeypatch, tmp_path):
     g = build_graph([{"id": "a", "role": "A"}], ["ollama:x:1"], verifier_model="ollama:x:1",
                     intent="explain")
     body = {"goal": "Compare REST and GraphQL", "graph": g.model_dump(), "approvals": ["approve"]}
-    r = TestClient(app).post("/api/runs", json=body)
+    c = TestClient(app)
+    r = c.post("/api/runs", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "pending"  # creating the run does not execute it
+    r = c.post(f"/api/runs/{r.json()['run_id']}/execute", json={"approvals": ["approve"]})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "done"
     assert routes._TASKS == {}

@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     default_budget_tokens: int = Field(default=8000, gt=0)
     default_timeout_s: int = Field(default=60, gt=0)
 
+    # Whole-run wall clock. On expiry the run is cancelled, ended with
+    # RUN_END {"ok": false, "reason": "run_timeout"} and marked failed, so a run
+    # can never sit in "running" forever (a serverless function is killed at its
+    # maxDuration, 300s on Vercel, leaving nothing to mark it failed). 0 = off.
+    run_timeout_s: int = Field(default=270, ge=0)
+    # One event-store round trip. The Turso driver is synchronous HTTP with no
+    # timeout of its own; a hung request used to hold the store lock forever.
+    # 0 = off.
+    db_op_timeout_s: float = Field(default=30.0, ge=0)
+
     # ---------- security ----------
     # No default. An unset SECRET_KEY is blank in dev and fatal in prod (below),
     # so a shipped fallback secret can never silently become the live one.

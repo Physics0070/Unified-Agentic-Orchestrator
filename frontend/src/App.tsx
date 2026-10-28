@@ -222,19 +222,35 @@ export default function App() {
     if (!graph) return
     setEvents([]); setMetrics(null); setReplay(null); setOutput(null); setTab('trace')
     const approvals = graph.nodes.filter((n) => n.type === 'approval').map((n) => n.id)
-    const { run_id } = await api.start(goal, graph, approvals)
+    const { run_id, status } = await api.start(goal, graph, approvals)
     setRunGoal(goal); recorded.current = null
     setRunId(run_id); setLive(true)
     stopRef.current?.()
-    stopRef.current = streamEvents(
-      run_id,
-      (e) => setEvents((prev) => (prev.some((x) => x.seq === e.seq) ? prev : [...prev, e])),
-      () => {
-        setLive(false)
-        api.metrics(run_id).then(setMetrics).catch(() => {})
-        api.output(run_id).then(setOutput).catch(() => {})
-      },
-    )
+    const addEvent = (e: LogEvent) =>
+      setEvents((prev) => (prev.some((x) => x.seq === e.seq) ? prev : [...prev, e]))
+    const finish = () => {
+      setLive(false)
+      api.metrics(run_id).then(setMetrics).catch(() => {})
+      api.output(run_id).then(setOutput).catch(() => {})
+    }
+    if (status === 'pending') {
+      // Serverless: the run executes inside one long request, so there is no
+      // in-process task for a stream to follow. Fire it without awaiting and
+      // poll the event log while it is open.
+      let stopped = false
+      const poll = () => api.events(run_id).then((r) => { if (!stopped) r.events.forEach(addEvent) }).catch(() => {})
+      const timer = setInterval(poll, 2000)
+      stopRef.current = () => { stopped = true; clearInterval(timer) }
+      api.execute(run_id, approvals)
+        .catch((e) => { if (!stopped) setError((e as Error).message) })
+        .then(async () => {
+          clearInterval(timer)
+          await poll()
+          if (!stopped) finish()
+        })
+      return
+    }
+    stopRef.current = streamEvents(run_id, addEvent, finish)
   })
 
   const runRef = useRef<(() => void) | null>(null)

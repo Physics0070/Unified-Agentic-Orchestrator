@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
 from sse_starlette.sse import EventSourceResponse
@@ -15,6 +16,7 @@ from backend.api.schemas import (
     ApprovalRequest,
     ChatRequest,
     CompileRequest,
+    ExecuteRequest,
     GoalRequest,
     KnowledgeQuery,
     MarginalValueRequest,
@@ -436,34 +438,89 @@ async def start_run(req: RunRequest, request: Request) -> dict:
         dna_decision = await predict_and_log(store, graph, run_id)
 
     predicted_fitness = dna_decision.original.predicted_fitness if dna_decision else None
-
-    async def _execute():
-        async with EventStore() as s:
-            try:
-                result = await Executor(
-                    s, graph, run_id, seed=req.seed, approvals=set(req.approvals),
-                    goal=req.goal, workspace_id=req.workspace_id or "",
-                ).run()
-                # Workflow DNA: record the real outcome for future predictions.
-                await record_and_log(s, graph, run_id, result, predicted_fitness)
-            except Exception:
-                log.exception("run %s crashed", run_id)
-                await s.set_run_status(run_id, "failed", ended=True)
-            finally:
-                _TASKS.pop(run_id, None)
+    out = {"run_id": run_id, "config_hash": graph.config_hash}
 
     if os.environ.get("VERCEL"):
         # Serverless freezes the function once the response is sent, so a
-        # background task never finishes. Run inline (the function allows up to
-        # maxDuration); the run is already complete when the client polls it.
-        await _execute()
-        async with EventStore() as store:
-            row = await store.get_run(run_id)
-        return {"run_id": run_id, "config_hash": graph.config_hash,
-                "status": row.status if row else "failed"}
+        # background task never finishes, and a run executed inside this request
+        # is invisible to the browser until the POST returns. So only create the
+        # run here; the client then calls POST /runs/{id}/execute (which runs it
+        # inline) and watches the event log while that request is open.
+        return {**out, "status": "pending"}
 
-    _TASKS[run_id] = asyncio.create_task(_execute())
-    return {"run_id": run_id, "config_hash": graph.config_hash, "status": "running"}
+    _TASKS[run_id] = asyncio.create_task(
+        _execute_run(run_id, graph, req.goal, req.seed, set(req.approvals),
+                     req.workspace_id or "", predicted_fitness)
+    )
+    return {**out, "status": "running"}
+
+
+async def _fail_run(run_id: str, reason: str) -> None:
+    """End a run that can no longer finish, on a fresh connection - the one the
+    run was using is the likeliest thing to be stuck."""
+    try:
+        async with EventStore() as s:
+            await s.append_and_set_status(
+                run_id, EventType.RUN_END, {"ok": False, "reason": reason},
+                status="failed", ended=True,
+            )
+    except Exception:
+        log.exception("could not mark run %s failed (%s)", run_id, reason)
+
+
+async def _execute_run(run_id: str, graph: GraphSpec, goal: str, seed: int,
+                       approvals: set[str], workspace_id: str,
+                       predicted_fitness: float | None) -> None:
+    """Run the executor under the run watchdog. Never leaves a run 'running'."""
+    try:
+        async with EventStore() as s:
+            try:
+                async with asyncio.timeout(settings.run_timeout_s or None) as watchdog:
+                    result = await Executor(
+                        s, graph, run_id, seed=seed, approvals=approvals,
+                        goal=goal, workspace_id=workspace_id,
+                    ).run()
+                    # Workflow DNA: record the real outcome for future predictions.
+                    await record_and_log(s, graph, run_id, result, predicted_fitness)
+            except TimeoutError:
+                if not watchdog.expired():
+                    raise
+                log.error("run %s hit the %ss watchdog", run_id, settings.run_timeout_s)
+                await _fail_run(run_id, "run_timeout")
+            except Exception:
+                log.exception("run %s crashed", run_id)
+                await s.set_run_status(run_id, "failed", ended=True)
+    except Exception:
+        # The store itself is unusable (or timed out): still try to end the run.
+        log.exception("run %s lost its event store", run_id)
+        await _fail_run(run_id, "store_error")
+    finally:
+        _TASKS.pop(run_id, None)
+
+
+@router.post("/runs/{run_id}/execute")
+async def execute_run(run_id: str, req: ExecuteRequest) -> dict:
+    """Execute a run created by POST /runs (status 'pending'), inline.
+
+    Used on serverless hosts, where POST /runs only creates the row. Goal, graph
+    and seed come from the row. Answers 409 unless the run is still 'pending',
+    so a double click or a retry cannot execute it twice.
+    """
+    budget.ensure_available()
+    async with EventStore() as store:
+        row = await store.get_run(run_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        if row.status != "pending" or not row.graph_spec.get("nodes"):
+            raise HTTPException(status_code=409, detail=f"run is {row.status}, not executable")
+        if not await store.claim_run(run_id):
+            raise HTTPException(status_code=409, detail="run already started")
+    graph = GraphSpec(**migrate(row.graph_spec)).finalize()
+    await _execute_run(run_id, graph, row.goal, row.seed, set(req.approvals),
+                       req.workspace_id or "", None)
+    async with EventStore() as store:
+        final = await store.get_run(run_id)
+    return {"run_id": run_id, "status": final.status if final else "failed"}
 
 
 @router.post("/runs/{run_id}/approve")
@@ -544,7 +601,42 @@ async def list_runs(
         raise HTTPException(400, "ids must be UUIDs") from e
     async with EventStore() as store:
         rows = [r for r in [await store.get_run(i) for i in wanted] if r is not None]
-        return {"runs": [r.model_dump() for r in rows]}
+        out = []
+        for r in rows:
+            note = await _stale_note(store, r)
+            out.append(_as_stale_failed(r, note) if note else r.model_dump())
+        return {"runs": out}
+
+
+def _parse_ts(ts: object) -> datetime | None:
+    try:
+        d = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=UTC)
+
+
+async def _stale_note(store: EventStore, row) -> str | None:
+    """A 'running' run with no event for longer than the watchdog allows is dead
+    (its function was killed before it could mark itself failed). Returns the
+    note to show instead of a status that will never change, else None."""
+    if getattr(row, "status", None) != "running" or not settings.run_timeout_s:
+        return None
+    last = None
+    if row.last_seq:
+        tail = await store.read(row.run_id, from_seq=row.last_seq - 1)
+        last = _parse_ts(tail[-1].ts) if tail else None
+    last = last or _parse_ts(row.started_at)
+    if last is None:
+        return None
+    age = (datetime.now(UTC) - last).total_seconds()
+    if age <= settings.run_timeout_s + 60:
+        return None
+    return f"no activity for {int(age)}s; the run was abandoned and is reported as failed"
+
+
+def _as_stale_failed(row, note: str) -> dict:
+    return {**row.model_dump(), "status": "failed", "note": note}
 
 
 @router.get("/runs/{run_id}")
@@ -555,8 +647,9 @@ async def get_run(run_id: str) -> dict:
             raise HTTPException(status_code=404, detail="unknown run")
         cost = await store.aggregate_cost(run_id)
         lat = await store.aggregate_latency(run_id)
+        note = await _stale_note(store, row)
         return {
-            "run": row.model_dump(),
+            "run": _as_stale_failed(row, note) if note else row.model_dump(),
             "cost": cost.model_dump(),
             "latency": {**lat.model_dump(), "parallel_efficiency": lat.parallel_efficiency},
         }
