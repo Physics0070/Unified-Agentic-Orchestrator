@@ -115,3 +115,10 @@ def test_pasted_turso_secrets_are_stripped():
 
     s = Settings(turso_database_url=" libsql://x.turso.io\n", turso_auth_token="tok\n ")  # noqa: S106
     assert s.turso_database_url == "libsql://x.turso.io" and s.turso_auth_token == "tok"  # noqa: S105
+
+
+def test_a_secret_pasted_twice_uses_the_first_copy():
+    from backend.config import Settings
+
+    s = Settings(turso_auth_token="abc.def\n\nabc.def")  # noqa: S106
+    assert s.turso_auth_token == "abc.def"  # noqa: S105
