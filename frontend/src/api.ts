@@ -347,6 +347,10 @@ export const api = {
     }>('/api/router/explain', { method: 'POST', body: JSON.stringify({ message, priority, models }) }),
 
   trace: (runId: string) => req<RunTrace>(`/api/runs/${runId}/trace`),
+
+  githubContext: (repo: string, token?: string) =>
+    req<{ repo: string; text: string; truncated: boolean }>('/api/github/context',
+      { method: 'POST', body: JSON.stringify({ repo, token: token || null }) }),
 }
 
 // ------------------------------------------------------------------ chat

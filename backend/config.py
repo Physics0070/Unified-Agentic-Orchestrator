@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # needs an edit to routes.py. OpenRouter is empty by default: its free tier
     # is unreliable enough that it only joins the mix when asked for.
     groq_models: str = "llama-3.3-70b-versatile"
-    gemini_models: str = "gemini-2.0-flash"
+    gemini_models: str = "gemini-2.5-flash"
     openai_models: str = "gpt-4o-mini"
     openrouter_models: str = ""
     # Cap on simultaneous in-flight model calls across the whole council, so a

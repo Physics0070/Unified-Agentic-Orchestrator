@@ -87,22 +87,8 @@ export function MetricsPanel({ metrics, report }: {
               hint="Compensated ÷ failed branches" />
       </div>
 
-      {/* The honest verdict, stated plainly rather than buried in a chart. */}
-      {metrics.verdict && (
-        <div
-          className="rounded-lg border px-3 py-2.5 text-[12px] leading-relaxed"
-          style={{
-            borderColor: metrics.duplicate_work || (metrics.least_valuable_agent &&
-              migData.some((d) => d.mig < MIG_FLOOR)) ? 'var(--color-failed)' : 'var(--color-line)',
-            background: 'var(--color-surface-2)',
-          }}
-        >
-          <div className="text-[10px] uppercase tracking-wider text-[var(--color-ink-faint)] mb-1">
-            System verdict
-          </div>
-          <p className="text-[var(--color-ink)]">{metrics.verdict}</p>
-        </div>
-      )}
+      {/* The verdict used to sit here. It now leads the whole screen (RunSummary
+          in App.tsx), so repeating it one tab away would only say it twice. */}
 
       <div>
         <h3 className="text-[11px] uppercase tracking-wider text-[var(--color-ink-faint)] mb-2">
@@ -150,8 +136,8 @@ export function MetricsPanel({ metrics, report }: {
                 <YAxis tick={AXIS} axisLine={false} tickLine={false} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Line type="monotone" dataKey="quality_per_1k_tokens"
-                      stroke="var(--color-accent)" strokeWidth={2}
-                      dot={{ r: 3, fill: 'var(--color-accent)' }} name="findings / 1k tokens" />
+                      stroke="var(--color-accent-ink)" strokeWidth={2}
+                      dot={{ r: 3, fill: 'var(--color-accent-ink)' }} name="findings / 1k tokens" />
                 <Line type="monotone" dataKey="unique_findings"
                       stroke="var(--color-running)" strokeWidth={1.5} strokeDasharray="4 3"
                       dot={{ r: 2 }} name="unique findings" />

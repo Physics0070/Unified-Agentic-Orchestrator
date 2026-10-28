@@ -7,7 +7,14 @@ from collections.abc import AsyncIterator
 from backend.providers.base import Completion, ProviderAdapter, ProviderError
 
 # Published Gemini Flash rates, USD per 1M tokens.
-RATES = {"gemini-2.0-flash": (0.10, 0.40), "gemini-1.5-flash": (0.075, 0.30)}
+# Published Gemini rates, USD per 1M tokens. An id that is not listed costs
+# 0.0 rather than guessing, so an unpriced model under-reports instead of
+# inventing a number - add the row when you point GEMINI_MODEL somewhere new.
+RATES = {
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.0-flash": (0.10, 0.40),
+    "gemini-1.5-flash": (0.075, 0.30),
+}
 
 
 def _to_gemini(messages: list[dict]) -> tuple[list[dict], str | None]:

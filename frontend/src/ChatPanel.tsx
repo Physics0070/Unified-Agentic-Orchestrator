@@ -13,8 +13,9 @@ import {
   streamChat,
 } from './api'
 import { GraphCanvas, type NodeStatus } from './GraphCanvas'
+import { usePersisted } from './store'
 import { ExecutionTrace } from './TracePanel'
-import { Badge, Button, Empty, Spinner } from './ui'
+import { Badge, Button, Empty, Icon, Spinner } from './ui'
 
 interface Turn {
   question: string
@@ -85,6 +86,37 @@ function newConversationId(): string {
 
 /** Per-turn node status, derived from the same SSE data already rendered in
  * the transcript - no separate event vocabulary needed for the chat graph. */
+/** Resting state for the workflow panel. The two shapes a turn can take,
+ *  shown rather than described - the same move as the orchestrator's pipeline
+ *  preview and trace legend. */
+function RouteLegend() {
+  const routes: [string, string][] = [
+    ['fast', 'one model answers directly'],
+    ['council', 'specialists run in parallel, then merge'],
+  ]
+  return (
+    <div className="p-4">
+      <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--color-ink-faint)] mb-2.5">
+        what gets drawn here
+      </p>
+      <ol className="space-y-0">
+        {routes.map(([name, what], i) => (
+          <li key={name} className="flex items-baseline gap-2.5 font-mono text-[11px] leading-[1.9]">
+            <span className="text-[var(--color-ink-faint)] select-none">
+              {i === routes.length - 1 ? '└─' : '├─'}
+            </span>
+            <span className="text-[var(--color-accent-ink)] w-[56px] shrink-0">{name}</span>
+            <span className="text-[var(--color-ink-faint)] min-w-0">{what}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="font-mono text-[10px] text-[var(--color-ink-faint)] mt-3 leading-relaxed">
+        the router picks, and says which it picked under every answer.
+      </p>
+    </div>
+  )
+}
+
 function deriveChatStatuses(turn: Turn): Record<string, NodeStatus> {
   const p = turn.plan
   const s: Record<string, NodeStatus> = {}
@@ -200,6 +232,12 @@ function renderMarkdown(src: string) {
   return out
 }
 
+/** The link target comes from model output. Only web and mail links are
+ * allowed; `javascript:` and `data:` URLs would run on click. */
+function safeHref(href: string): string {
+  return /^(https?:\/\/|mailto:)/i.test(href) ? href : '#'
+}
+
 function inline(text: string): React.ReactNode[] {
   // Split on `code`, **bold** and [text](url), keeping delimiters so they can be styled.
   return text
@@ -215,7 +253,7 @@ function inline(text: string): React.ReactNode[] {
       const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(part)
       if (link) {
         return (
-          <a key={i} href={link[2]} target="_blank" rel="noreferrer" className="chat-link">
+          <a key={i} href={safeHref(link[2])} target="_blank" rel="noreferrer" className="chat-link">
             {link[1]}
           </a>
         )
@@ -445,7 +483,8 @@ const SUGGESTIONS = [
   'Review the trade-offs of event sourcing for an audit system',
 ]
 
-function ConversationSidebar({ conversations, activeId, onSelect, onNew }: {
+function ConversationSidebar({ conversations, activeId, onSelect, onNew, onHide }: {
+  onHide: () => void
   conversations: StoredConversation[]
   activeId: string
   onSelect: (id: string) => void
@@ -455,7 +494,12 @@ function ConversationSidebar({ conversations, activeId, onSelect, onNew }: {
     <aside className="chat-sidebar">
       <div className="chat-sidebar-head">
         <span className="chat-sidebar-title">Chats</span>
-        <button className="chat-sidebar-new" onClick={onNew}>+ New</button>
+        <span className="flex items-center gap-1">
+          <button className="chat-sidebar-new" onClick={onNew}>+ New</button>
+          <button onClick={onHide} aria-label="Hide chat list" title="Hide chat list" className="p-1.5 text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]">
+            <Icon name="panel" size={15} />
+          </button>
+        </span>
       </div>
       <div className="chat-sidebar-list">
         {conversations.length === 0 && (
@@ -501,10 +545,10 @@ function WorkflowPanel({ turn }: { turn: Turn | undefined }) {
           />
         </div>
       ) : (
-        <Empty icon="◆" title="No workflow yet">
-          Ask a question and its routing - direct answer or parallel
-          specialists - will be drawn here as it runs.
-        </Empty>
+        <div className="flex-1 min-h-0 overflow-auto">
+          <div className="h-44"><Empty title="No workflow yet">Ask a question and the route the router picked is drawn here.</Empty></div>
+          <RouteLegend />
+        </div>
       )}
 
       {p && p.clarifying_questions.length > 0 && (
@@ -520,6 +564,7 @@ function WorkflowPanel({ turn }: { turn: Turn | undefined }) {
 }
 
 export function ChatPanel({ models }: { models: string[] }) {
+  const [listOpen, setListOpen] = usePersisted('aco.chat.list', true)
   const [turns, setTurns] = useState<Turn[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -531,6 +576,8 @@ export function ChatPanel({ models }: { models: string[] }) {
   const [docCount, setDocCount] = useState(0)
   const [conversations, setConversations] = useState<StoredConversation[]>(loadConversations)
   const [activeId, setActiveId] = useState<string>(newConversationId)
+  // Phones hide the sidebar/workflow columns; these open them as overlay sheets.
+  const [sheet, setSheet] = useState<'chats' | 'flow' | null>(null)
   const abortRef = useRef<(() => void) | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -641,12 +688,22 @@ export function ChatPanel({ models }: { models: string[] }) {
   }
 
   return (
-    <div className="chat-shell">
-      <ConversationSidebar
-        conversations={conversations} activeId={activeId}
-        onSelect={loadConversation} onNew={startNew}
-      />
+    <div className={`chat-shell ${listOpen ? '' : 'no-list'}`}>
+      {listOpen ? (
+        <ConversationSidebar
+          conversations={conversations} activeId={activeId}
+          onSelect={loadConversation} onNew={startNew} onHide={() => setListOpen(false)}
+        />
+      ) : (
+        <button onClick={() => setListOpen(true)} aria-label="Show chat list" title="Show chat list"
+          className="chat-list-reopen"><Icon name="chat" size={14} /> Chats</button>
+      )}
       <div className="chat-wrap">
+      <div className="chat-mobilebar">
+        <button onClick={() => setSheet('chats')}><Icon name="chat" size={14} /> Chats</button>
+        <button onClick={() => { startNew() }}>+ New</button>
+        {turns.length > 0 && <button onClick={() => setSheet('flow')}>Workflow</button>}
+      </div>
       <div className="chat-scroll">
         {turns.length === 0 && (
           <div className="chat-hero">
@@ -744,7 +801,11 @@ export function ChatPanel({ models }: { models: string[] }) {
       </div>
 
       <div className="composer">
-        <textarea
+        <div className="composer-field">
+          {/* Same prompt as the orchestrator's goal bar: both surfaces take a
+              command, so both should look like they do. */}
+          <span aria-hidden className="composer-prompt">aco&nbsp;❯</span>
+          <textarea
           ref={taRef}
           value={input}
           rows={1}
@@ -763,6 +824,7 @@ export function ChatPanel({ models }: { models: string[] }) {
             }
           }}
         />
+        </div>
         {busy
           ? <Button onClick={stop} variant="ghost">Stop</Button>
           : <Button onClick={() => send(input)} disabled={!input.trim()}>Send</Button>}
@@ -774,6 +836,19 @@ export function ChatPanel({ models }: { models: string[] }) {
       </div>
 
       <WorkflowPanel turn={turns[turns.length - 1]} />
+
+      {sheet && (
+        <div className="chat-sheet" onClick={() => setSheet(null)}>
+          <div className="chat-sheet-body" onClick={(e) => e.stopPropagation()}>
+            {sheet === 'chats'
+              ? <ConversationSidebar
+                  conversations={conversations} activeId={activeId}
+                  onSelect={(id) => { loadConversation(id); setSheet(null) }}
+                  onNew={() => { startNew(); setSheet(null) }} onHide={() => setSheet(null)} />
+              : <WorkflowPanel turn={turns[turns.length - 1]} />}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,0 +1,307 @@
+/* ---------------------------------------------------------------------------
+   Landing surface.
+
+   A separate token set from the app's (index.css): pure black rather than the
+   app's layered greys, violet rather than teal, and one typeface doing every
+   job at four weights. Scoped under .dala so the two never collide - the app
+   keeps its own palette the moment you leave this page.
+
+   The system trusts scale for hierarchy, not weight: the 113px headline and
+   the 15px label are both weight 400. Body copy is weight 200, which is the
+   choice that makes the page feel airy instead of shouted.
+   --------------------------------------------------------------------------- */
+
+.dala {
+  --void: #000000;
+  --bone: #ffffff;
+  --ash: #9a9a9a;
+  --silver: #bdbdbd;
+  /* The brand lives in index.css so one skin swaps both surfaces. */
+  --iris: var(--color-accent);
+  --iris-ink: var(--color-accent-ink);
+  --iris-on: var(--color-accent-on);
+  --saffron: var(--color-accent-2);
+
+  --f: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --w-page: 1280px;
+  --r: 24px;
+
+  position: relative;
+  min-height: 100vh;
+  background: var(--void);
+  color: var(--bone);
+  font-family: var(--f);
+  font-feature-settings: 'ss01' on, 'cv02' on;
+  overflow-x: clip;
+}
+
+.dala *, .dala *::before, .dala *::after { box-sizing: border-box; }
+
+.dala-shell {
+  position: relative;
+  z-index: 1;
+  max-width: var(--w-page);
+  margin: 0 auto;
+  padding-inline: 24px;
+}
+
+/* The cloud. Fixed to the viewport and behind everything, so it can cross the
+   page as the copy hands over from one side to the other instead of sitting in
+   a column. */
+.d-field {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Still triangles scattered down the whole document, under the moving cloud. */
+.dala-ambient {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ type */
+
+.dala h1, .dala h2, .dala h3 { margin: 0; font-weight: 400; }
+
+.d-display {
+  font-size: clamp(42px, 8.1vw, 113px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+.d-h2 {
+  font-size: clamp(32px, 5.4vw, 78px);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+.d-h3 {
+  font-size: clamp(24px, 3vw, 42px);
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+}
+.d-body {
+  font-size: 21px;
+  font-weight: 200;
+  line-height: 1.52;
+  color: var(--bone);
+  max-width: 48ch;
+  margin: 0;
+}
+.d-body--quiet { color: var(--silver); }
+
+.d-label {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  color: var(--saffron);
+  margin: 0;
+}
+.d-caption {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ash);
+}
+
+/* --------------------------------------------------------------- controls */
+
+.d-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--iris);
+  color: var(--iris-on);
+  border: none;
+  border-radius: var(--r);
+  padding: 14.4px 18px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+.d-pill:hover { background: var(--color-accent-dim); transform: translateY(-1px); }
+.d-pill:active { transform: none; }
+
+.d-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  padding: 14.4px 0;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  color: var(--ash);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.d-ghost:hover { color: var(--bone); }
+
+.dala a:focus-visible, .dala button:focus-visible {
+  outline: 2px solid var(--iris-ink);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* -------------------------------------------------------------------- nav */
+
+.d-nav {
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  padding-block: 24px;
+}
+.d-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--bone);
+  text-decoration: none;
+}
+.d-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-left: auto;
+}
+.d-nav-links a {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  color: var(--ash);
+  text-decoration: none;
+  transition: color 0.16s ease;
+}
+.d-nav-links a:hover { color: var(--bone); }
+
+/* ------------------------------------------------------------ scroll stage */
+/* Two columns, and each step claims one of them. Alternating the column is
+   what sends the cloud across the page: it always takes the side the copy is
+   not using. Steps are a screen tall so a shape has room to travel between two
+   settled states. Opacity and translate are written per frame from the same
+   loop that draws the cloud, so the two can never drift apart.
+
+   Steps are deliberately taller than a screen: the whole gap between two of
+   them is what the cloud has to cross in, so the height is what sets how slow
+   the change feels. */
+
+/* A column of steps, each taking half the width and sitting on its own side.
+   Grid was wrong here: two items with explicit columns land on the SAME row,
+   so the hero and the next step appeared side by side instead of one after
+   the other. */
+.d-stage { display: flex; flex-direction: column; }
+
+.d-step {
+  min-height: 150vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding-block: 36px;
+  will-change: opacity, transform;
+}
+.d-step--left  { width: 50%; align-self: flex-start; }
+.d-step--right { width: 50%; align-self: flex-end; }
+.d-step--full  { width: 100%; }
+
+/* The hero is the only step that cannot be scrolled to the middle of the
+   screen, so centring it inside a 130vh box pushes the CTA below the fold.
+   It starts from the top instead; every other step still centres. */
+.d-step--hero { gap: 24px; justify-content: flex-start; padding-top: 7vh; }
+.d-step--close { align-items: flex-start; gap: 30px; }
+
+.d-hero-ctas { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.d-proof { display: flex; gap: 24px; flex-wrap: wrap; padding-top: 6px; }
+.d-proof span {
+  color: var(--ash); font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ stats */
+
+.d-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 60px 36px;
+  width: 100%;
+}
+.d-stat { display: flex; flex-direction: column; gap: 12px; }
+.d-stat b {
+  font-size: clamp(36px, 4.4vw, 78px);
+  font-weight: 400;
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+}
+.d-stat span { font-size: 20px; font-weight: 200; line-height: 1.52; color: var(--silver); }
+
+/* ------------------------------------------------------------------- foot */
+
+.d-foot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 24px 36px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding-block: 36px 60px;
+  color: var(--ash);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.d-foot a { color: var(--ash); text-decoration: none; }
+.d-foot a:hover { color: var(--bone); }
+.d-foot .d-foot-end { margin-left: auto; }
+
+/* ----------------------------------------------------------------- narrow */
+
+@media (max-width: 900px) {
+  /* No room to sit beside the text, so every step runs full width and the
+     cloud stays centred behind it at half opacity (see MorphField). */
+  .d-step--left, .d-step--right, .d-step--full {
+    width: 100%;
+    align-self: stretch;
+  }
+  .d-step { min-height: 138vh; }
+  .d-foot .d-foot-end { margin-left: 0; }
+}
+@media (max-width: 560px) {
+  .d-nav { gap: 12px; padding-block: 18px; }
+  .d-nav-links { gap: 14px; }
+  .d-pill { padding: 12px 14px; }
+  /* Brand + CTA is all that fits; the links all repeat in the footer. */
+  .d-nav-links .d-nav-hide, .d-nav-links .d-nav-hide-sm { display: none; }
+  .d-brand { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Belt and braces. paintCopy already resets these itself, but a step must
+     never end up invisible because a script did not run. */
+  .d-step { opacity: 1 !important; transform: none !important; }
+}
