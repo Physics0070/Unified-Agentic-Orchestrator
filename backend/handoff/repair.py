@@ -57,69 +57,59 @@ async def repair_loop(
     first_seq: int | None = None
     feedback: str | None = None
 
+    def ev(event_type: EventType, payload: dict) -> dict:
+        return {
+            "event_type": event_type, "node_id": node_id, "agent_id": agent_id,
+            "payload": payload,
+        }
+
     for attempt in range(budget + 1):
         raw = await produce(feedback)
 
-        seq = await store.append(
-            run_id,
-            EventType.HANDOFF_EMITTED,
-            node_id=node_id,
-            agent_id=agent_id,
-            payload={"attempt": attempt, "raw": _clip(raw)},
-        )
-        first_seq = first_seq or seq
-
+        # Validation is pure CPU, so it runs BEFORE any write and the events
+        # that follow a model call are persisted together in one round trip
+        # (still ordered and atomic) instead of one round trip each.
+        emitted = ev(EventType.HANDOFF_EMITTED, {"attempt": attempt, "raw": _clip(raw)})
         result: ValidationResult = validate(raw, schema)
 
         if result.ok:
-            final = await store.append(
-                run_id,
-                EventType.HANDOFF_VALIDATED,
-                node_id=node_id,
-                agent_id=agent_id,
-                payload={"attempt": attempt, "payload": result.payload},
-            )
+            seqs = await store.append_many(run_id, [
+                emitted,
+                ev(EventType.HANDOFF_VALIDATED, {"attempt": attempt, "payload": result.payload}),
+            ])
+            first_seq = first_seq or seqs[0]
             return HandoffOutcome(
                 ok=True,
                 payload=result.payload,
                 attempts=attempt,
                 first_seq=first_seq,
-                final_seq=final,
+                final_seq=seqs[1],
             )
 
         errors = result.errors
-        await store.append(
-            run_id,
-            EventType.HANDOFF_REJECTED,
-            node_id=node_id,
-            agent_id=agent_id,
-            payload={"attempt": attempt, "errors": errors},
-        )
+        batch = [emitted, ev(EventType.HANDOFF_REJECTED, {"attempt": attempt, "errors": errors})]
 
         if attempt == budget:
-            break
+            batch.append(ev(EventType.BRANCH_FAILED, {
+                "reason": "handoff_unrepairable", "attempts": budget + 1, "errors": errors,
+            }))
+            seqs = await store.append_many(run_id, batch)
+            first_seq = first_seq or seqs[0]
+            return HandoffOutcome(
+                ok=False, attempts=budget + 1, errors=errors,
+                first_seq=first_seq, final_seq=seqs[-1],
+            )
 
         # The exact validator text goes back to the producer - not a paraphrase.
         feedback = REPAIR_INSTRUCTION.format(errors=result.error_text, schema=_schema_text(schema))
-        await store.append(
-            run_id,
-            EventType.REPAIR_ATTEMPT,
-            node_id=node_id,
-            agent_id=agent_id,
-            payload={"attempt": attempt + 1, "of": budget, "errors_returned": errors},
-        )
+        batch.append(ev(EventType.REPAIR_ATTEMPT, {
+            "attempt": attempt + 1, "of": budget, "errors_returned": errors,
+        }))
+        seqs = await store.append_many(run_id, batch)
+        first_seq = first_seq or seqs[0]
         log.info("repair %s/%s for agent=%s: %s", attempt + 1, budget, agent_id, errors)
 
-    final = await store.append(
-        run_id,
-        EventType.BRANCH_FAILED,
-        node_id=node_id,
-        agent_id=agent_id,
-        payload={"reason": "handoff_unrepairable", "attempts": budget + 1, "errors": errors},
-    )
-    return HandoffOutcome(
-        ok=False, attempts=budget + 1, errors=errors, first_seq=first_seq, final_seq=final
-    )
+    raise AssertionError("unreachable: the last attempt returns above")  # pragma: no cover
 
 
 def _schema_text(schema: dict) -> str:

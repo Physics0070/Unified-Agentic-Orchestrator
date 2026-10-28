@@ -384,11 +384,12 @@ class Executor:
             )
 
         spent = {"tokens": 0}
+        schema = self._outgoing_schema(node.id) or agent.output_schema or {"type": "object"}
 
         async def produce(feedback: str | None):
             messages = [
                 {"role": "system", "content": agent.system_contract},
-                {"role": "user", "content": _render(clean, agent, self.goal)},
+                {"role": "user", "content": _render(clean, agent, self.goal, schema)},
             ]
             if feedback:
                 messages.append({"role": "user", "content": feedback})
@@ -403,6 +404,7 @@ class Executor:
                 self.completer, self.guard, agent, messages,
                 max_tokens=min(remaining, 1024),
                 seed=self.seed, temperature=0.0,
+                json_mode=schema.get("type", "object") == "object",
                 store=self.store, run_id=self.run_id, node_id=node.id, agent_id=agent.id,
             )
             # The engine records every completion, whatever produced it. Replay
@@ -429,8 +431,6 @@ class Executor:
                 )
                 raise BudgetExceeded(f"{agent.id} exceeded {agent.budget_tokens} tokens")
             return c.text
-
-        schema = self._outgoing_schema(node.id) or agent.output_schema or {"type": "object"}
 
         try:
             async with asyncio.timeout(agent.timeout_s):
@@ -560,14 +560,35 @@ class Executor:
         )
 
 
-def _render(context: dict, agent, goal: str = "") -> str:
+def _schema_block(schema: dict | None) -> str:
+    """The exact contract the reply is validated against, spelled out.
+
+    The old prompt only said "match your declared schema" without ever showing
+    it, so every agent's first answer missed required keys and burned a repair
+    call plus ~5 events. Naming the required keys and embedding the schema gets
+    most first attempts through validation.
+    """
+    import json
+
+    if not schema or schema == {"type": "object"}:
+        return "Respond with a single JSON object and nothing else."
+    required = schema.get("required") or []
+    keys = f"Required top-level keys: {', '.join(required)}.\n" if required else ""
+    return (
+        "Respond with ONLY one JSON object (no prose, no markdown fence) that validates "
+        f"against this JSON Schema.\n{keys}JSON Schema:\n"
+        f"{json.dumps(schema, separators=(',', ':'))[:3000]}"
+    )
+
+
+def _render(context: dict, agent, goal: str = "", schema: dict | None = None) -> str:
     import json
 
     head = f"Overall goal: {goal}\n\n" if goal else ""
+    tail = _schema_block(schema if schema is not None else agent.output_schema)
     if not context:
-        return f"{head}Your task: {agent.role}\n\nProduce output matching your declared schema."
+        return f"{head}Your task: {agent.role}\n\n{tail}"
     return (
         f"{head}Your task: {agent.role}\n\nUpstream results:\n"
-        f"{json.dumps(context, indent=2)[:4000]}\n\n"
-        "Produce output matching your declared schema."
+        f"{json.dumps(context, indent=2)[:4000]}\n\n{tail}"
     )

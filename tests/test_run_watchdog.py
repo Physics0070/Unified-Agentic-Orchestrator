@@ -129,6 +129,8 @@ def test_store_operation_timeout_raises_instead_of_hanging(monkeypatch):
             assert time.monotonic() - started < 0.9
             # the lock was released: the store is still usable afterwards
             await asyncio.sleep(1)
+            # a real write can exceed 0.1s on a slow CI machine
+            monkeypatch.setattr(settings, "db_op_timeout_s", 30)
             await s.create_run("r", GOAL, "h", 1, {}, "pending")
 
     asyncio.run(go())

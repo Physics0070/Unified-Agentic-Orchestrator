@@ -19,18 +19,21 @@ before landing here.
 """
 
 import asyncio
+import http.client
 import json
 import logging
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 from urllib.request import url2pathname
 
 import turso_serverless
+from turso_serverless.protocol import ProtocolError, build_batch_step, decode_value
 
 from backend.config import settings
 from backend.events.types import CostTotals, Event, EventType, LatencyTotals, RunRow
@@ -59,6 +62,142 @@ def _sqlite_path(url: str) -> str:
     if url.startswith("file://"):
         return url2pathname(urlparse(url).path) or _DEFAULT_SQLITE
     return url[len("file:"):] or _DEFAULT_SQLITE
+
+_INSERT_EVENT = (
+    "INSERT INTO events (run_id, seq, node_id, agent_id, event_type, payload, "
+    "tokens_in, tokens_out, cost_usd, latency_ms, ts) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+# Same columns, but the seq is derived inside the transaction from the value the
+# preceding UPDATE just wrote to runs.last_seq (minus the rows still to come).
+_INSERT_EVENT_FROM_RUN = (
+    "INSERT INTO events (run_id, seq, node_id, agent_id, event_type, payload, "
+    "tokens_in, tokens_out, cost_usd, latency_ms, ts) "
+    "SELECT ?, last_seq - ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM runs WHERE run_id = ?"
+)
+
+
+def _event_row(
+    event_type, node_id, agent_id, payload, tokens_in, tokens_out, cost_usd, latency_ms, ts
+) -> tuple:
+    """The 9 non-key columns of one events row, in INSERT order after seq."""
+    return (
+        node_id, agent_id, str(event_type),
+        json.dumps(payload) if payload is not None else None,
+        tokens_in, tokens_out, cost_usd, latency_ms, ts,
+    )
+
+
+def _status_sql(run_id: str, status: tuple[str, str | None]) -> tuple[str, list]:
+    new_status, ended_at = status
+    if ended_at is not None:
+        return (
+            "UPDATE runs SET status = ?, ended_at = ? WHERE run_id = ?",
+            [new_status, ended_at, run_id],
+        )
+    return "UPDATE runs SET status = ? WHERE run_id = ?", [new_status, run_id]
+
+
+def _set_status(c, run_id: str, status: tuple[str, str | None]) -> None:
+    sql, args = _status_sql(run_id, status)
+    c.execute(sql, args)
+
+
+def _run_batch(session, steps: list[dict]) -> tuple[list, list]:
+    """Send `steps` as one Hrana pipeline `batch` request on a throwaway stream.
+
+    Stateless on purpose (baton null, stream closed in the same request): nothing
+    carries over between calls, so an idle gap can never leave us holding an
+    expired stream. Returns (step_results, step_errors)."""
+    body = {
+        "baton": None,
+        "requests": [{"type": "batch", "batch": {"steps": steps}}, {"type": "close"}],
+    }
+    try:
+        resp = json.loads(session._post("/v3/pipeline", body))
+        first = (resp.get("results") or [None])[0] or {}
+        if first.get("type") == "error":
+            err = first.get("error") or {}
+            raise EventStoreError(f"event store rejected the operation: {err.get('message')}")
+        result = first["response"]["result"]
+        return result["step_results"], result["step_errors"]
+    except (ValueError, KeyError, TypeError, ProtocolError) as e:
+        session._reset_stream()
+        raise EventStoreError(f"event store request failed: {type(e).__name__}: {e}") from e
+
+
+_IDLE_MAX_S = 15.0  # drop a pooled socket idle longer than this rather than trust it
+
+
+def _install_keepalive(session, timeout: float | None) -> None:
+    """Make `turso_serverless` reuse one HTTP connection.
+
+    Its Session posts with `urllib.request.urlopen`, which opens a brand new
+    TCP + TLS connection for EVERY statement (~0.7s each to a remote region -
+    the measured cause of ~3s per event, 4 statements per append). Replace its
+    `_post` with one that keeps a single `http.client` connection alive. Same
+    contract as the original: any failure resets the stream and raises
+    ProtocolError; the one addition is a single transparent retry when a REUSED
+    socket turns out to have been closed by the server before it answered.
+    """
+    state: dict = {"conn": None, "netloc": None, "used": 0.0}
+
+    def drop() -> None:
+        conn, state["conn"] = state["conn"], None
+        if conn is not None:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def _post(path: str, body: dict) -> bytes:
+        parts = urlsplit(f"{session._base_url}{path}")
+        data = json.dumps(body, allow_nan=False).encode("utf-8")
+        for attempt in (0, 1):
+            if state["conn"] is not None and (
+                state["netloc"] != parts.netloc or time.monotonic() - state["used"] > _IDLE_MAX_S
+            ):
+                drop()
+            reused = state["conn"] is not None
+            if not reused:
+                cls = (
+                    http.client.HTTPSConnection if parts.scheme == "https"
+                    else http.client.HTTPConnection
+                )
+                state["conn"], state["netloc"] = cls(parts.netloc, timeout=timeout), parts.netloc
+            try:
+                state["conn"].request("POST", parts.path, body=data, headers=session._headers())
+                resp = state["conn"].getresponse()
+                raw = resp.read()
+            except (http.client.HTTPException, OSError) as e:
+                drop()
+                stale = isinstance(
+                    e, http.client.RemoteDisconnected | ConnectionResetError | BrokenPipeError
+                )
+                if reused and attempt == 0 and stale:
+                    continue
+                session._reset_stream()
+                raise ProtocolError(f"request to {parts.netloc} failed: {e!r}") from None
+            state["used"] = time.monotonic()
+            if resp.status != 200:
+                session._reset_stream()
+                message = None
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        message = next(
+                            (parsed[k] for k in ("error", "message")
+                             if isinstance(parsed.get(k), str)),
+                            None,
+                        )
+                except ValueError:
+                    pass
+                detail = f": {message}" if message is not None else ""
+                raise ProtocolError(f"HTTP status {resp.status}{detail}")
+            return raw
+        raise ProtocolError("unreachable")  # pragma: no cover
+
+    session._post = _post
 
 
 class EventStoreError(RuntimeError):
@@ -122,7 +261,13 @@ class EventStore:
                 ) from e
 
         def _open():
-            c = turso_serverless.connect(self._url, auth_token=self._token)
+            # isolation_level=None: no implicit BEGIN/COMMIT around DML. Every
+            # statement here is a single atomic autocommit one (multi-statement
+            # appends go through `_remote_append`), which saves 2 round trips each.
+            c = turso_serverless.connect(
+                self._url, auth_token=self._token, isolation_level=None
+            )
+            _install_keepalive(c._session, settings.db_op_timeout_s or None)
             c.execute("PRAGMA foreign_keys = ON")
             return c
 
@@ -153,9 +298,14 @@ class EventStore:
         def _call():
             try:
                 return fn(self._conn_obj)
-            except driver_error as e:
+            except (driver_error, ProtocolError) as e:
                 log.error("turso error: %s: %s", type(e).__name__, e)
                 raise EventStoreError(f"event store rejected the operation: {e}") from e
+            finally:
+                if not self._sqlite and self._conn_obj is not None:
+                    # Each op is one autocommit request: don't resume the same
+                    # server stream after an idle gap (it may have expired).
+                    self._conn_obj._session._baton = None
 
         async def _locked():
             async with self._lock:
@@ -294,35 +444,14 @@ class EventStore:
         """Append one event, return its seq. Atomic and gapless per run.
 
         The lock is process-local, which matches this app's deployment: one
-        backend instance, no cross-process writers. `_run` acquires it around
-        the whole read-modify-write-insert sequence below, so the read of the
-        new seq and the dependent INSERT can never interleave with another
-        append from this same process.
+        backend instance, no cross-process writers. On Turso this is ONE HTTP
+        round trip (see `_remote_append`); on local sqlite it is one transaction.
         """
-        ts = _now()
-
-        def _do(c):
-            cur = c.execute(
-                "UPDATE runs SET last_seq = last_seq + 1 WHERE run_id = ? RETURNING last_seq",
-                [run_id],
-            )
-            row = list(cur)
-            if not row:
-                raise EventStoreError(f"unknown run_id {run_id}, create the run before appending")
-            new_seq = row[0][0]
-
-            c.execute(
-                "INSERT INTO events (run_id, seq, node_id, agent_id, event_type, payload, "
-                "tokens_in, tokens_out, cost_usd, latency_ms, ts) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [run_id, new_seq, node_id, agent_id, str(event_type),
-                 json.dumps(payload) if payload is not None else None,
-                 tokens_in, tokens_out, cost_usd, latency_ms, ts],
-            )
-            c.commit()
-            return new_seq
-
-        return await self._run(_do)
+        row = _event_row(
+            event_type, node_id, agent_id, payload, tokens_in, tokens_out, cost_usd,
+            latency_ms, _now(),
+        )
+        return (await self._append_rows(run_id, [row]))[0]
 
     async def append_many(
         self,
@@ -332,59 +461,30 @@ class EventStore:
         node_id: str | None = None,
         agent_id: str | None = None,
     ) -> list[int]:
-        """Reserve a contiguous seq range and insert N rows in one round trip.
+        """Reserve a contiguous seq range and insert N rows in ONE round trip.
 
         Each event is a dict: `event_type` (required), `payload`, `latency_ms`,
         `tokens_in`, `tokens_out`, `cost_usd`, `node_id`, `agent_id`. The last
         two default to this call's shared `node_id`/`agent_id` kwargs when
-        omitted, so a batch can mix events for different nodes/agents (e.g. one
-        row per specialist) in a single round trip, or share one node/agent
-        (the original use case below) by only passing the kwargs.
+        omitted, so a batch can mix events for different nodes/agents.
 
-        For events with nothing but wall-clock between them (no model call, no
-        real work) - use this instead of N separate `append` calls. Deliberately
-        NOT used across a model call: that would delay NODE_START's visibility
-        in the trace viewer until the whole node finishes, trading live
-        progress for a saved round trip that isn't worth it. `executemany`
-        proven against the live DB: one UPDATE...RETURNING reserves the range,
-        one executemany inserts every row, same transaction, same round trip.
+        Atomic (all rows or none) and ordered (seqs are contiguous, in list
+        order). Use it for events with nothing but wall-clock between them (no
+        model call). Deliberately NOT used across a model call: that would delay
+        NODE_START's visibility in the trace viewer until the node finishes.
         """
         if not events:
             return []
         ts = _now()
-        n = len(events)
-
-        def _do(c):
-            cur = c.execute(
-                "UPDATE runs SET last_seq = last_seq + ? WHERE run_id = ? RETURNING last_seq",
-                [n, run_id],
+        rows = [
+            _event_row(
+                ev["event_type"], ev.get("node_id", node_id), ev.get("agent_id", agent_id),
+                ev.get("payload"), ev.get("tokens_in", 0), ev.get("tokens_out", 0),
+                ev.get("cost_usd", 0.0), ev.get("latency_ms"), ts,
             )
-            row = list(cur)
-            if not row:
-                raise EventStoreError(f"unknown run_id {run_id}, create the run before appending")
-            last_seq = row[0][0]
-            first_seq = last_seq - n + 1
-
-            c.executemany(
-                "INSERT INTO events (run_id, seq, node_id, agent_id, event_type, payload, "
-                "tokens_in, tokens_out, cost_usd, latency_ms, ts) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        run_id, first_seq + i,
-                        ev.get("node_id", node_id), ev.get("agent_id", agent_id),
-                        str(ev["event_type"]),
-                        json.dumps(ev["payload"]) if ev.get("payload") is not None else None,
-                        ev.get("tokens_in", 0), ev.get("tokens_out", 0),
-                        ev.get("cost_usd", 0.0), ev.get("latency_ms"), ts,
-                    )
-                    for i, ev in enumerate(events)
-                ],
-            )
-            c.commit()
-            return list(range(first_seq, last_seq + 1))
-
-        return await self._run(_do)
+            for ev in events
+        ]
+        return await self._append_rows(run_id, rows)
 
     async def append_and_set_status(
         self,
@@ -401,44 +501,100 @@ class EventStore:
         cost_usd: float = 0.0,
         latency_ms: int | None = None,
     ) -> int:
-        """One event insert plus one `runs.status` update, one round trip.
-
-        Replaces the common `append(RUN_START/RUN_END) + set_run_status(...)`
-        pair, which today costs 2 round trips for no reason - both go through
-        the same shared connection and lock, so gathering them concurrently
-        saves nothing; only merging the SQL does.
-        """
+        """One event insert plus one `runs.status` update, one round trip."""
         ts = _now()
+        row = _event_row(
+            event_type, node_id, agent_id, payload, tokens_in, tokens_out, cost_usd,
+            latency_ms, ts,
+        )
+        seqs = await self._append_rows(run_id, [row], status=(status, ts if ended else None))
+        return seqs[0]
+
+    async def _append_rows(
+        self,
+        run_id: str,
+        rows: list[tuple],
+        *,
+        status: tuple[str, str | None] | None = None,
+    ) -> list[int]:
+        """Allocate `len(rows)` contiguous seqs and insert them, optionally
+        updating `runs.status` (and `ended_at` when given) in the same
+        transaction. Returns the seqs in order."""
+        n = len(rows)
 
         def _do(c):
+            if not self._sqlite:
+                return self._remote_append(c, run_id, rows, status)
             cur = c.execute(
-                "UPDATE runs SET last_seq = last_seq + 1 WHERE run_id = ? RETURNING last_seq",
-                [run_id],
+                "UPDATE runs SET last_seq = last_seq + ? WHERE run_id = ? RETURNING last_seq",
+                [n, run_id],
             )
-            row = list(cur)
-            if not row:
+            got = list(cur)
+            if not got:
                 raise EventStoreError(f"unknown run_id {run_id}, create the run before appending")
-            new_seq = row[0][0]
-
-            c.execute(
-                "INSERT INTO events (run_id, seq, node_id, agent_id, event_type, payload, "
-                "tokens_in, tokens_out, cost_usd, latency_ms, ts) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [run_id, new_seq, node_id, agent_id, str(event_type),
-                 json.dumps(payload) if payload is not None else None,
-                 tokens_in, tokens_out, cost_usd, latency_ms, ts],
-            )
-            if ended:
-                c.execute(
-                    "UPDATE runs SET status = ?, ended_at = ? WHERE run_id = ?",
-                    [status, ts, run_id],
+            first_seq = got[0][0] - n + 1
+            try:
+                c.executemany(
+                    _INSERT_EVENT, [(run_id, first_seq + i, *r) for i, r in enumerate(rows)]
                 )
-            else:
-                c.execute("UPDATE runs SET status = ? WHERE run_id = ?", [status, run_id])
-            c.commit()
-            return new_seq
+                if status is not None:
+                    _set_status(c, run_id, status)
+                c.commit()
+            except sqlite3.Error:
+                c.rollback()  # else the bumped last_seq would ride on the next commit
+                raise
+            return list(range(first_seq, first_seq + n))
 
         return await self._run(_do)
+
+    def _remote_append(
+        self, c, run_id: str, rows: list[tuple], status: tuple[str, str | None] | None
+    ) -> list[int]:
+        """The whole append as ONE HTTP request (a Hrana pipeline `batch`).
+
+        BEGIN, bump `runs.last_seq`, insert each row at `last_seq - k` (read back
+        from the same transaction), optional status update, COMMIT. Each step is
+        conditional on the previous one succeeding; a trailing ROLLBACK, gated on
+        "a transaction is still open", cleans up after a failed step. Previously
+        this was BEGIN + UPDATE + INSERT + COMMIT = 4 sequential round trips.
+        """
+        n = len(rows)
+        steps = [build_batch_step("BEGIN", want_rows=False)]
+
+        def add(sql: str, args: list, want_rows: bool = False) -> None:
+            steps.append(build_batch_step(
+                sql, args=args, want_rows=want_rows,
+                condition={"type": "ok", "step": len(steps) - 1},
+            ))
+
+        add("UPDATE runs SET last_seq = last_seq + ? WHERE run_id = ? RETURNING last_seq",
+            [n, run_id], want_rows=True)
+        for i, r in enumerate(rows):
+            add(_INSERT_EVENT_FROM_RUN, [run_id, n - 1 - i, *r, run_id])
+        if status is not None:
+            sql, args = _status_sql(run_id, status)
+            add(sql, args)
+        steps.append(build_batch_step(
+            "COMMIT", want_rows=False, condition={"type": "ok", "step": len(steps) - 1}
+        ))
+        steps.append(build_batch_step(
+            "ROLLBACK", want_rows=False,
+            condition={"type": "not", "cond": {"type": "is_autocommit"}},
+        ))
+
+        results, errors = _run_batch(c._session, steps)
+        for err in errors:
+            if err:
+                msg = err.get("message", "unknown error") if isinstance(err, dict) else str(err)
+                raise EventStoreError(f"event store rejected the operation: {msg}")
+        bump = results[1] or {}
+        if not bump.get("rows"):
+            raise EventStoreError(f"unknown run_id {run_id}, create the run before appending")
+        last_seq = decode_value(bump["rows"][0][0])
+        for k in range(n):
+            if (results[2 + k] or {}).get("affected_row_count") != 1:
+                raise EventStoreError("event store did not insert the event")
+        return list(range(last_seq - n + 1, last_seq + 1))
 
     async def read(self, run_id: str, from_seq: int = 0) -> list[Event]:
         def _do(c):

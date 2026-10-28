@@ -22,10 +22,12 @@ class MemStore:
                                  latency_ms=kw.get("latency_ms")))
         return len(self.events)
 
-    async def append_many(self, run_id, rows, node_id=None):
-        for r in rows:
+    async def append_many(self, run_id, rows, node_id=None, agent_id=None):
+        return [
             await self.append(run_id, r["event_type"], node_id=r.get("node_id", node_id),
-                              payload=r.get("payload"))
+                              agent_id=r.get("agent_id", agent_id), payload=r.get("payload"))
+            for r in rows
+        ]
 
     async def append_and_set_status(self, run_id, et, payload, status, ended=False):
         await self.append(run_id, et, payload=payload)
