@@ -47,6 +47,10 @@ class GroqAdapter(ProviderAdapter):
         body: dict = {"model": model, "messages": messages, "temperature": temperature}
         if seed is not None:
             body["seed"] = seed
+        if "gpt-oss" in model:
+            # Reasoning tokens count against the agent's token budget; at the
+            # default effort one answer can exceed it before any JSON appears.
+            body["reasoning_effort"] = "low"
         if max_tokens:
             body["max_tokens"] = max_tokens
         if tools:
