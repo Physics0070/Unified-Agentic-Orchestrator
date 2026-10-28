@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.datastructures import MutableHeaders
 
 from backend import __version__
 from backend.api import router as api_router
@@ -52,6 +53,47 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; "
+        "connect-src 'self' https://api.github.com; object-src 'none'; "
+        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    ),
+}
+# Swagger UI (dev only) loads scripts from a CDN, which the CSP would block.
+_NO_CSP_PATHS = ("/docs", "/openapi.json")
+
+
+class SecurityHeadersMiddleware:
+    """Pure ASGI (not BaseHTTPMiddleware) so SSE streams are not buffered."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        skip_csp = scope["path"] in _NO_CSP_PATHS
+
+        async def send_wrapper(message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for k, v in SECURITY_HEADERS.items():
+                    if k == "Content-Security-Policy" and skip_csp:
+                        continue
+                    headers[k] = v
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -74,6 +116,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.exception_handler(EventStoreError)

@@ -217,7 +217,10 @@ async def knowledge_delete(doc_id: str, workspace_id: str) -> dict:
 
 @router.post("/knowledge/query")
 async def knowledge_query(req: KnowledgeQuery) -> dict:
-    ws = knowledge_base.get(req.workspace_id, create=False)
+    try:
+        ws = knowledge_base.get(req.workspace_id, create=False)
+    except KnowledgeError as e:
+        raise HTTPException(400, str(e)) from e
     if ws is None:
         return {"query": req.query, "mode": req.mode, "reranked": False, "hits": [],
                 "semantic_backend": None, "documents": 0, "chunks": 0}
@@ -519,10 +522,28 @@ async def resume(run_id: str) -> dict:
 
 
 @router.get("/runs")
-async def list_runs(limit: int = 25) -> dict:
+async def list_runs(
+    limit: int = 25,
+    ids: str | None = None,
+    x_admin_token: str | None = Header(default=None),
+) -> dict:
+    """Run ids are unguessable UUIDs and the browser remembers its own, so
+    `?ids=a,b` returns just those. Listing every visitor's runs is admin-only."""
     limit = max(1, min(limit, 100))
+    if ids is None:
+        _require_admin(x_admin_token)
+        async with EventStore() as store:
+            rows = await store.list_runs(limit)
+            return {"runs": [r.model_dump() for r in rows]}
+    wanted = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))
+    if len(wanted) > 50:
+        raise HTTPException(400, "at most 50 ids")
+    try:
+        wanted = [str(uuid.UUID(i)) for i in wanted]
+    except ValueError as e:
+        raise HTTPException(400, "ids must be UUIDs") from e
     async with EventStore() as store:
-        rows = await store.list_runs(limit)
+        rows = [r for r in [await store.get_run(i) for i in wanted] if r is not None]
         return {"runs": [r.model_dump() for r in rows]}
 
 

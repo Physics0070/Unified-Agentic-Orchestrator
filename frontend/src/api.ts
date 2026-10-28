@@ -254,6 +254,20 @@ export function getWorkspaceId(): string {
   }
 }
 
+const RUNS_KEY = 'aco.runIds'
+/** Run ids this browser started (capability model: ids are unguessable UUIDs). */
+export function getMyRunIds(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(RUNS_KEY) ?? '[]')
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 50) : []
+  } catch { return [] }
+}
+function rememberRunId(id: string) {
+  try {
+    localStorage.setItem(RUNS_KEY, JSON.stringify([id, ...getMyRunIds().filter((x) => x !== id)].slice(0, 50)))
+  } catch { /* storage unavailable: history simply isn't remembered */ }
+}
+
 const adminHeaders = (t?: string): Record<string, string> => (t ? { 'X-Admin-Token': t } : {})
 
 async function upload(file: File): Promise<KnowledgeSummary & { document: KnowledgeDoc }> {
@@ -294,9 +308,20 @@ export const api = {
       '/api/compile',
       { method: 'POST', body: JSON.stringify({ goal, answers, models, intent }) }),
 
+  /** Only this browser's own runs: GET /api/runs lists everyone's and is admin-only. */
+  listMine: () => {
+    const ids = getMyRunIds()
+    return ids.length
+      ? req<{ runs: unknown[] }>(`/api/runs?ids=${ids.join(',')}`)
+      : Promise.resolve({ runs: [] })
+  },
+
   start: (goal: string, graph: GraphSpec, approvals: string[]) =>
     req<{ run_id: string; config_hash: string }>(
-      '/api/runs', { method: 'POST', body: JSON.stringify({ goal, graph, approvals, workspace_id: getWorkspaceId() }) }),
+      '/api/runs', {
+        method: 'POST',
+        body: JSON.stringify({ goal, graph, approvals, workspace_id: getWorkspaceId() }),
+      }).then((r) => { rememberRunId(r.run_id); return r }),
 
   events: (runId: string) => req<{ events: LogEvent[] }>(`/api/runs/${runId}/events`),
   output: (runId: string) => req<RunOutput>(`/api/runs/${runId}/output`),

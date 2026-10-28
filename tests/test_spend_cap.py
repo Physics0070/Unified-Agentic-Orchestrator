@@ -25,7 +25,7 @@ def _clean():
 def _upload():
     return client.post(
         "/api/knowledge/upload",
-        data={"workspace_id": "w-cap"},
+        data={"workspace_id": "w-cap-test"},
         files={"file": ("a.txt", b"hello world", "text/plain")},
     )
 

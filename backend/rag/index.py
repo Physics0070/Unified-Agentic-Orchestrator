@@ -344,7 +344,7 @@ class Workspace:
                     "semantic_backend": self._semantic_backend()}
 
 
-_WORKSPACE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_WORKSPACE_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 MAX_WORKSPACES = 200
 
 
@@ -369,7 +369,7 @@ class KnowledgeBase:
 
     def get(self, workspace_id: str, *, create: bool = True) -> Workspace | None:
         if not _WORKSPACE_ID.match(workspace_id or ""):
-            raise KnowledgeError("workspace_id must be 1-64 letters, digits, '-' or '_'")
+            raise KnowledgeError("workspace_id must be 8-64 letters, digits, '-' or '_'")
         with self._lock:
             ws = self._spaces.get(workspace_id)
             if ws is None:

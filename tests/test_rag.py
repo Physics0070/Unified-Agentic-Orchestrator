@@ -176,7 +176,7 @@ def test_render_context_labels_sources_for_citation():
 
 
 def test_workspace_id_is_validated():
-    for bad in ("", "../etc", "a b", "x" * 65):
+    for bad in ("", "short", "../etc", "a b", "x" * 65):
         with pytest.raises(KnowledgeError):
             knowledge_base.get(bad)
-    assert knowledge_base.get("ok-id_1") is knowledge_base.get("ok-id_1")
+    assert knowledge_base.get("ok-id_123") is knowledge_base.get("ok-id_123")
