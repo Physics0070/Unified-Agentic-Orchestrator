@@ -223,7 +223,8 @@ async def test_run_workspace_reaches_knowledge_lookup(monkeypatch):
         return None
 
     monkeypatch.setattr(artifact_store, "put", put)
-    knowledge_base.get("ws-run-test").add_document("notes.txt", "The launch codename is Zephyrwind.")
+    ws = knowledge_base.get("ws-run-test")
+    ws.add_document("notes.txt", "The launch codename is Zephyrwind.")
     agent = AgentSpec(id="a", role="r", system_contract="c", tools=["knowledge_lookup"],
                       model="groq:x", output_schema={"type": "object"})
     graph = GraphSpec(nodes=[Node(id="n", type="agent", agent=agent)], edges=[])
