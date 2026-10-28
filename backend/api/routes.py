@@ -439,7 +439,7 @@ async def start_run(req: RunRequest, request: Request) -> dict:
             try:
                 result = await Executor(
                     s, graph, run_id, seed=req.seed, approvals=set(req.approvals),
-                    goal=req.goal,
+                    goal=req.goal, workspace_id=req.workspace_id or "",
                 ).run()
                 # Workflow DNA: record the real outcome for future predictions.
                 await record_and_log(s, graph, run_id, result, predicted_fitness)
