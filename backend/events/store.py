@@ -132,7 +132,12 @@ class EventStore:
     async def __aexit__(self, *exc: object) -> None:
         if self._conn_obj is not None:
             conn, self._conn_obj = self._conn_obj, None
-            await asyncio.to_thread(conn.close)
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(conn.close), settings.db_op_timeout_s or None
+                )
+            except TimeoutError:
+                log.error("event store close timed out; abandoning the connection")
 
     def _run(self, fn) -> Any:
         """Run a synchronous DB-API sequence on the shared connection.
@@ -154,7 +159,17 @@ class EventStore:
 
         async def _locked():
             async with self._lock:
-                return await asyncio.to_thread(_call)
+                limit = settings.db_op_timeout_s or None
+                try:
+                    # The sync driver has no timeout of its own. Without this a
+                    # hung HTTP request kept the lock forever and every other
+                    # node's append queued behind it - the run froze silently.
+                    return await asyncio.wait_for(asyncio.to_thread(_call), limit)
+                except TimeoutError as e:
+                    log.error("event store operation timed out after %ss", limit)
+                    raise EventStoreError(
+                        f"event store operation timed out after {limit}s"
+                    ) from e
 
         return _locked()
 
@@ -242,6 +257,24 @@ class EventStore:
             c.commit()
 
         await self._run(_do)
+
+    async def claim_run(self, run_id: str) -> bool:
+        """Atomically move a run from 'pending' to 'running'.
+
+        True for exactly one caller; a second concurrent /execute loses and
+        must not start the executor again.
+        """
+        def _do(c):
+            cur = c.execute(
+                "UPDATE runs SET status = 'running' WHERE run_id = ? AND status = 'pending' "
+                "RETURNING run_id",
+                [run_id],
+            )
+            got = bool(list(cur))
+            c.commit()
+            return got
+
+        return await self._run(_do)
 
     # ---------- events ----------
 

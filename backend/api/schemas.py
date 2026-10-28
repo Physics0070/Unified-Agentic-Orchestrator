@@ -107,6 +107,13 @@ class RunRequest(BaseModel):
     workspace_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
+class ExecuteRequest(BaseModel):
+    """Body of POST /runs/{id}/execute. Goal and graph come from the run row."""
+
+    approvals: list[str] = Field(default_factory=list, max_length=32)
+    workspace_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class ApprovalRequest(BaseModel):
     node_id: str = Field(min_length=1, max_length=128)
     granted: bool = True

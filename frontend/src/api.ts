@@ -317,11 +317,18 @@ export const api = {
   },
 
   start: (goal: string, graph: GraphSpec, approvals: string[]) =>
-    req<{ run_id: string; config_hash: string }>(
+    req<{ run_id: string; config_hash: string; status?: string }>(
       '/api/runs', {
         method: 'POST',
         body: JSON.stringify({ goal, graph, approvals, workspace_id: getWorkspaceId() }),
       }).then((r) => { rememberRunId(r.run_id); return r }),
+
+  /** Serverless hosts only create the run in start(); this runs it (status 'pending'). */
+  execute: (runId: string, approvals: string[]) =>
+    req<{ run_id: string; status: string }>(`/api/runs/${runId}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ approvals, workspace_id: getWorkspaceId() }),
+    }),
 
   events: (runId: string) => req<{ events: LogEvent[] }>(`/api/runs/${runId}/events`),
   output: (runId: string) => req<RunOutput>(`/api/runs/${runId}/output`),
