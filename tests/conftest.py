@@ -2,6 +2,7 @@
 
 import pytest
 
+from backend import budget
 from backend.config import settings
 from backend.rag import knowledge_base
 
@@ -13,5 +14,7 @@ def _isolated_knowledge_storage(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "turso_database_url", f"file:{tmp_path / 'knowledge.db'}")
     monkeypatch.setattr(settings, "turso_auth_token", "")
     knowledge_base._spaces.clear()
+    budget.forget()
     yield
     knowledge_base._spaces.clear()
+    budget.forget()

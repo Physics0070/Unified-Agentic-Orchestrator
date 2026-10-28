@@ -102,6 +102,9 @@ class RunRequest(BaseModel):
     graph: GraphSpec
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
     approvals: list[str] = Field(default_factory=list, max_length=32)
+    # Knowledge workspace the agents' knowledge_lookup tool searches. Same shape as
+    # the knowledge endpoints' ids; None = no workspace.
+    workspace_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class ApprovalRequest(BaseModel):

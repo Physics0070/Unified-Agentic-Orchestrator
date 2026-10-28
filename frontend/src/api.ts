@@ -296,7 +296,7 @@ export const api = {
 
   start: (goal: string, graph: GraphSpec, approvals: string[]) =>
     req<{ run_id: string; config_hash: string }>(
-      '/api/runs', { method: 'POST', body: JSON.stringify({ goal, graph, approvals }) }),
+      '/api/runs', { method: 'POST', body: JSON.stringify({ goal, graph, approvals, workspace_id: getWorkspaceId() }) }),
 
   events: (runId: string) => req<{ events: LogEvent[] }>(`/api/runs/${runId}/events`),
   output: (runId: string) => req<RunOutput>(`/api/runs/${runId}/output`),
