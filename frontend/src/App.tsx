@@ -238,16 +238,27 @@ export default function App() {
       // in-process task for a stream to follow. Fire it without awaiting and
       // poll the event log while it is open.
       let stopped = false
-      const poll = () => api.events(run_id).then((r) => { if (!stopped) r.events.forEach(addEvent) }).catch(() => {})
-      const timer = setInterval(poll, 2000)
-      stopRef.current = () => { stopped = true; clearInterval(timer) }
+      let done = false
+      const timer = setInterval(() => { poll() }, 2000)
+      const stopAll = () => { stopped = true; clearInterval(timer) }
+      const poll = () => api.events(run_id).then((r) => {
+        if (stopped || done) return
+        r.events.forEach(addEvent)
+        // The run is over when its RUN_END is in the log, whichever request
+        // happened to finish first (a browser may also retry the execute call,
+        // which the server answers with 409 while the first one still runs).
+        if (r.events.some((e) => e.event_type === 'RUN_END')) {
+          done = true; stopAll(); finish()
+        }
+      }).catch(() => {})
+      const cap = setTimeout(() => { if (!done) { done = true; stopAll(); finish() } }, 10 * 60 * 1000)
+      stopRef.current = () => { stopAll(); clearTimeout(cap) }
       api.execute(run_id, approvals)
-        .catch((e) => { if (!stopped) setError((e as Error).message) })
-        .then(async () => {
-          clearInterval(timer)
-          await poll()
-          if (!stopped) finish()
+        .catch((e) => {
+          const msg = (e as Error).message
+          if (!stopped && !msg.startsWith('409')) setError(msg)
         })
+        .then(() => { poll() })
       return
     }
     stopRef.current = streamEvents(run_id, addEvent, finish)
