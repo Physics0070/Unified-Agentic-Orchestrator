@@ -424,12 +424,18 @@ def clarifying_questions(goal: str, intent: str | None = None) -> list[str]:
     ]
 
 
-def permission_prompt(branches: list[str]) -> str:
+def permission_prompt(branches: list[str], intent: str | None = None) -> str:
+    """Ask permission, naming the deliverable by what the goal actually is:
+    only an audit (or the legacy no-intent call) produces a remediation report."""
+    deliverable = (
+        "prioritized remediation report" if intent in (None, "audit", "security")
+        else "final report"
+    )
     return (
         "I can run "
         + ", ".join(branches)
         + " as parallel read-only agents, verify their merged output with an independent "
-        "council node, and produce a prioritized remediation report. "
+        f"council node, and produce a {deliverable}. "
         "No files will be written. Shall I proceed?"
     )
 

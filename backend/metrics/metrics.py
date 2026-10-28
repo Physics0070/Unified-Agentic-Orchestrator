@@ -94,6 +94,8 @@ class AgentMetric(BaseModel):
 
 class RunMetrics(BaseModel):
     run_id: str
+    # Distinct models seen in NODE_START / TOOL_RESULT payloads.
+    models_used: list[str] = Field(default_factory=list)
     agents: list[AgentMetric] = Field(default_factory=list)
     redundancy_index: float = 0.0
     duplicate_pairs: list[dict] = Field(default_factory=list)
@@ -173,6 +175,11 @@ async def compute(store: EventStore, run_id: str) -> RunMetrics:
     events = await store.read(run_id)
     by_node = _texts_by_node(events)
     m = RunMetrics(run_id=run_id)
+    m.models_used = sorted({
+        str(e.payload["model"]) for e in events
+        if e.event_type in (EventType.NODE_START, EventType.TOOL_RESULT)
+        and e.payload and e.payload.get("model")
+    })
 
     cost = await store.aggregate_cost(run_id)
     lat = await store.aggregate_latency(run_id)

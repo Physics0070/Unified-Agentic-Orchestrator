@@ -123,6 +123,17 @@ export function recordFor(a: {
     row.cost += e.cost_usd
     row.calls += 1
   }
+  // No completion rows carried a model (cached/replayed or stripped events):
+  // fall back to the models the run declared on NODE_START or in its graph.
+  if (Object.keys(models).length === 0) {
+    const declared = new Set<string>()
+    for (const e of a.events) {
+      const m = e.event_type === 'NODE_START' ? (e.payload?.model as string | undefined) : undefined
+      if (m) declared.add(m)
+    }
+    for (const n of a.graph?.nodes ?? []) if (n.agent?.model) declared.add(n.agent.model)
+    for (const m of declared) models[m] = { tokens: 0, cost: 0, calls: 0 }
+  }
 
   const t0 = a.events[0]?.ts, t1 = a.events[a.events.length - 1]?.ts
   const sum = (f: (e: LogEvent) => number) => a.events.reduce((x, e) => x + f(e), 0)

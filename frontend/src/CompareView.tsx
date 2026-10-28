@@ -36,6 +36,13 @@ function outputInfo(r: RunRecord) {
   return { nodes: o.outputs?.length ?? 0, findings, json: JSON.stringify(o.outputs ?? null) }
 }
 
+/** Distinct models used by a run; older saved records may lack `models`, so derive from the graph. */
+function modelCount(r: RunRecord): number {
+  const set = new Set(Object.keys(r.models ?? {}))
+  if (set.size === 0) for (const n of r.graph?.nodes ?? []) if (n.agent?.model) set.add(n.agent.model)
+  return set.size
+}
+
 const label = (r: RunRecord) => `${r.goal.length > 70 ? r.goal.slice(0, 70) + '…' : r.goal} · ${ago(r.ts)}`
 const TH = 'py-1.5 font-normal text-right'
 
@@ -89,11 +96,11 @@ export function CompareView({ runs, onOpenRun }: { runs: RunRecord[]; onOpenRun:
     { label: 'Parallel efficiency', a: A.parallel, b: B.parallel, fmt: (n) => `${n.toFixed(1)}×`, lowerBetter: false },
     { label: 'Handoff validity', a: A.handoff, b: B.handoff, fmt: (n) => n.toFixed(2), lowerBetter: false },
     { label: 'Failed nodes', a: A.failed, b: B.failed, fmt: num, lowerBetter: true },
-    { label: 'Models used', a: Object.keys(A.models).length, b: Object.keys(B.models).length, fmt: num, lowerBetter: true },
+    { label: 'Models used', a: modelCount(A), b: modelCount(B), fmt: num, lowerBetter: true },
   ]
   const show = (n: number | null, fmt: (n: number) => string) => (n == null ? '—' : fmt(n))
 
-  const names = [...new Set([...Object.keys(A.models), ...Object.keys(B.models)])].sort()
+  const names = [...new Set([...Object.keys(A.models ?? {}), ...Object.keys(B.models ?? {})])].sort()
   const oa = outputInfo(A), ob = outputInfo(B)
   const cell = (u: RunRecord['models'][string] | undefined, k: 'tokens' | 'cost' | 'calls') =>
     u ? (k === 'cost' ? usd(u.cost) : num(u[k])) : '—'

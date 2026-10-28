@@ -53,7 +53,8 @@ function Chips({ label, items, tone }: {
 }
 
 function Row({ s }: { s: TraceStep }) {
-  const [open, setOpen] = useState(false)
+  const failed = s.status === 'failed'
+  const [open, setOpen] = useState(failed)   // failed steps open themselves, error visible
   const called = s.tool_calls.map((c) => c.tool)
   return (
     <div className="border-b border-[var(--color-line)] last:border-b-0">
@@ -64,7 +65,7 @@ function Row({ s }: { s: TraceStep }) {
         className="w-full flex items-center gap-3 px-3 min-h-11 text-left hover:bg-[var(--color-surface-2)] transition-colors"
       >
         <span aria-hidden className={`h-2 w-2 rounded-full shrink-0 ${DOT[s.status]}`} />
-        <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-ink)]">
+        <span className={`min-w-0 flex-1 truncate text-[12px] ${failed ? 'text-[var(--color-failed)] font-semibold' : 'text-[var(--color-ink)]'}`}>
           {s.node_id}
           {s.type && <span className="text-[var(--color-ink-faint)]"> · {s.type}</span>}
         </span>
@@ -74,6 +75,12 @@ function Row({ s }: { s: TraceStep }) {
         <span className="text-[11px] tabular-nums text-[var(--color-ink-muted)]">${s.cost_usd.toFixed(4)}</span>
         <span aria-hidden className="text-[var(--color-ink-faint)] text-[10px]">{open ? '▾' : '▸'}</span>
       </button>
+
+      {!open && failed && s.error && (
+        <div className="mx-3 mb-2 ml-8 rounded-md border border-[#f8717155] bg-[#f871711f] px-2 py-1.5 text-[11px] text-[var(--color-failed)] break-words">
+          {s.error}
+        </div>
+      )}
 
       {open && (
         <div className="px-3 pb-3 pl-8 space-y-2.5">

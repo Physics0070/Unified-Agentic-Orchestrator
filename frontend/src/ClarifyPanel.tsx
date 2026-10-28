@@ -3,7 +3,7 @@ import { Button } from './ui'
 
 export interface Clarification {
   questions: { id: string; text: string }[]
-  permission: string
+  permission?: string
   plan: {
     intent: string; complexity: string; rationale: string; source: string
     specialists: { id: string; role: string }[]
@@ -53,7 +53,8 @@ export function ClarifyPanel({ clarification, onSubmit, busy }: {
         <div className="text-[10px] uppercase tracking-wider text-[var(--color-ink-faint)] mb-1.5">
           Permission requested
         </div>
-        <p className="text-[12px] leading-relaxed text-[var(--color-ink)]">{clarification.permission}</p>
+        <p className="text-[12px] leading-relaxed text-[var(--color-ink)]">{clarification.permission?.trim() ||
+          'I can run the planned agents in parallel as read-only agents, verify their merged output, and produce a final report. No files will be written. Shall I proceed?'}</p>
         <label className="mt-1 flex items-center gap-2 min-h-11 text-[12px] cursor-pointer select-none">
           <input
             type="checkbox" checked={granted}

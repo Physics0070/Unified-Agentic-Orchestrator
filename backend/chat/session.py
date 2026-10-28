@@ -109,7 +109,8 @@ def chat_graph(plan: Plan, models: list[str]) -> GraphSpec:
 
 
 def _trace(plan: Plan, plan_ms: int, contributions: list[dict], ranked: list,
-           answer_model: str, total_ms: int, fanout_ms: int, answer: str) -> list[dict]:
+           answer_model: str, total_ms: int, fanout_ms: int, answer: str,
+           answer_error: str | None = None) -> list[dict]:
     """The turn as execution-trace steps, built from what actually happened so
     the trace works even when the event log is unavailable."""
     steps = [new_step(
@@ -130,7 +131,8 @@ def _trace(plan: Plan, plan_ms: int, contributions: list[dict], ranked: list,
             repairs=1 if c.get("repaired") else 0,
             used_fallback=bool(c.get("used_fallback"))))
     steps.append(new_step(
-        "answer", type="answer", status="done", model=answer_model,
+        "answer", type="answer", status="failed" if answer_error else "done",
+        error=answer_error, model=answer_model,
         depends_on=[c["aspect"] for c in contributions] or ["plan"],
         duration_ms=max(total_ms - plan_ms - fanout_ms, 0), output=answer[:1600]))
     return steps
@@ -411,6 +413,7 @@ async def run_turn(
         except Exception as e:
             log.warning("web search failed, continuing without it: %s", e)
     chunks: list[str] = []
+    answer_error: str | None = None
     gen = (
         stream_synthesis(answer_question, contributions, answer_model, history=history,
                           fallback_model=answer_fallback)
@@ -426,6 +429,7 @@ async def run_turn(
             yield {"event": "token", "data": piece}
     except Exception as e:
         log.exception("answer stream failed")
+        answer_error = str(e)[:500] or type(e).__name__
         msg = f"\n\n_The answer stream failed: {e}_"
         chunks.append(msg)
         yield {"event": "token", "data": msg}
@@ -461,6 +465,8 @@ async def run_turn(
         "models_used": sorted(
             {answer_model, *(c.get("model") or "" for c in contributions)} - {""}
         ),
+        "status": "failed" if answer_error else "done",
+        "error": answer_error,
         "answer_model": answer_model,
         "answer_model_reason": answer_model_reason,
         "timing": {
@@ -493,7 +499,7 @@ async def run_turn(
         "knowledge": kb,
         "routing": decision.model_dump() if decision else None,
         "trace": _trace(plan, plan_ms, contributions, ranked, answer_model, total_ms, fanout_ms,
-                        answer),
+                        answer, answer_error),
     }
 
     # Neither `bench` nor the final answer depends on the store writes below -
@@ -503,11 +509,12 @@ async def run_turn(
     # on to see its answer). The writes still run to completion before this
     # generator's caller closes the store - see backend/api/routes.py's `gen`.
     yield {"event": "benchmarks", "data": bench}
-    yield {"event": "done", "data": {"run_id": run_id, "answer": answer}}
+    yield {"event": "done", "data": {"run_id": run_id, "answer": answer,
+                                     **({"error": answer_error} if answer_error else {})}}
 
     if store:
         try:
-            if answer:
+            if answer and not answer_error:
                 # The answer is a completion too. Recording it under a stable
                 # node id means a replayed turn reproduces the reply itself,
                 # not just the specialist notes that fed it.
@@ -519,7 +526,7 @@ async def run_turn(
                 )
             await store.append_and_set_status(
                 run_id, EventType.RUN_END, {"benchmarks": bench},
-                status="done", ended=True,
+                status="failed" if answer_error else "done", ended=True,
             )
         except Exception as e:
             log.warning("could not close run in log: %s", e)

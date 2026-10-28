@@ -10,10 +10,16 @@ import base64
 import re
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from backend.limiter import limiter
+
 MAX_CHARS = 3000
+# Upstream README bytes we are willing to decode (base64 is ~4/3 of the bytes).
+_MAX_README_B64 = 64_000
+# Read-only and public (no admin token), so it is capped per client instead.
+RATE_LIMIT = "10/minute"
 _REPO = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]{1,100}$")
 _API = "https://api.github.com"
 
@@ -93,12 +99,14 @@ async def fetch_repo_context(
     for c in commits or []:
         lines.append(f"- {c['sha'][:7]} {c['commit']['message'].splitlines()[0][:100]}")
     if readme and readme.get("encoding") == "base64":
-        text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")
+        raw = "".join((readme.get("content") or "").split())[:_MAX_README_B64]
+        text = base64.b64decode(raw[: len(raw) - len(raw) % 4]).decode("utf-8", "replace")
         lines += ["README:", text.strip()]
     out = "\n".join(lines)
     return {"repo": meta["full_name"], "text": out[:MAX_CHARS], "truncated": len(out) > MAX_CHARS}
 
 
 @router.post("/context")
-async def github_context(req: ContextRequest) -> dict:
+@limiter.limit(RATE_LIMIT)
+async def github_context(request: Request, req: ContextRequest) -> dict:
     return await fetch_repo_context(req.repo, req.token)
