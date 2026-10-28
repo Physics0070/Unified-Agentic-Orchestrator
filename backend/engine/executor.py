@@ -182,6 +182,13 @@ class Executor:
                     # passing outcome via exc_info= attaches the actual one.
                     log.error("node %s raised", node_id, exc_info=outcome)
                     res = NodeResult(node_id=node_id, ok=False, error=str(outcome))
+                    # An exception that escapes the node (a provider that is down,
+                    # say) wrote no failure row, so the trace and the UI - both
+                    # derived from the log - showed the node as running forever.
+                    await self.store.append(
+                        self.run_id, EventType.BRANCH_FAILED, node_id=node_id,
+                        payload={"reason": "exception", "error": str(outcome)[:300]},
+                    )
                 else:
                     res = outcome
                 self.results[node_id] = res
