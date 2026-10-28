@@ -17,6 +17,7 @@ answer now instead of a security finding.
 import logging
 from collections.abc import AsyncIterator
 
+from backend import budget
 from backend.providers import registry
 from backend.providers.registry import adapter_for
 
@@ -100,10 +101,13 @@ async def stream_direct(
         *_history_messages(history or []),
         {"role": "user", "content": question},
     ]
+    budget.ensure_available()
+    budget.record(budget.estimate_tokens(str(messages)))
     yielded = False
     try:
         async for piece in adapter.stream(messages, name, temperature=temperature):
             yielded = True
+            budget.record(budget.estimate_tokens(piece))
             yield piece
     except Exception as e:
         if yielded or not fallback_model:
@@ -112,6 +116,7 @@ async def stream_direct(
                     model, e, fallback_model)
         fb_adapter, fb_name = adapter_for(fallback_model)
         async for piece in fb_adapter.stream(messages, fb_name, temperature=temperature):
+            budget.record(budget.estimate_tokens(piece))
             yield piece
 
 
@@ -169,10 +174,13 @@ async def stream_synthesis(
         *_history_messages(history or []),
         {"role": "user", "content": f"Question:\n{question}\n\nSpecialist notes:\n{notes}"},
     ]
+    budget.ensure_available()
+    budget.record(budget.estimate_tokens(str(messages)))
     yielded = False
     try:
         async for piece in adapter.stream(messages, name, temperature=0.3):
             yielded = True
+            budget.record(budget.estimate_tokens(piece))
             yield piece
     except Exception as e:
         if yielded or not fallback_model:
@@ -181,6 +189,7 @@ async def stream_synthesis(
                     model, e, fallback_model)
         fb_adapter, fb_name = adapter_for(fallback_model)
         async for piece in fb_adapter.stream(messages, fb_name, temperature=0.3):
+            budget.record(budget.estimate_tokens(piece))
             yield piece
 
 

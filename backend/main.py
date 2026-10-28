@@ -19,6 +19,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from backend import __version__
 from backend.api import router as api_router
+from backend.budget import DailyCapReached
 from backend.config import settings
 from backend.events import EventStoreError
 from backend.github_context import router as github_router
@@ -83,6 +84,14 @@ async def event_log_unavailable(request: Request, exc: EventStoreError) -> JSONR
     log.warning("event log unavailable on %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=503, content={"error": "event_log_unavailable", "message": str(exc)[:200]}
+    )
+
+
+@app.exception_handler(DailyCapReached)
+async def daily_cap_reached(request: Request, exc: DailyCapReached) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"error": "daily_cap_reached", "message": "Daily usage cap reached; try tomorrow."},
     )
 
 
