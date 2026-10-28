@@ -1,5 +1,7 @@
 """Per-IP rate limits and the global daily token cap on the public API."""
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -88,3 +90,63 @@ def test_usage_endpoint_reports_tokens_and_cost(monkeypatch) -> None:
     assert u["cost_usd"] == pytest.approx(0.0034)
     assert u["remaining"] == 3800
     assert u["cap_reached"] is False
+
+
+def test_usage_survives_process_restart(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "daily_token_cap", 5000)
+    budget.record(1200, 0.5)
+    budget.flush()
+    budget.forget()  # a new process: empty memory, same database
+    u = budget.usage()
+    assert u["tokens"] == 1200
+    assert u["cost_usd"] == pytest.approx(0.5)
+
+
+def test_cap_blocks_across_restart(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "daily_token_cap", 1000)
+    budget.record(1500)
+    budget.flush()
+    budget.forget()
+    with pytest.raises(budget.DailyCapReached):
+        budget.ensure_available()
+    assert client.get("/api/usage").json()["cap_reached"] is True
+
+
+def test_record_is_batched_then_flushed(monkeypatch) -> None:
+    monkeypatch.setattr(budget, "FLUSH_SECONDS", 3600.0)
+    monkeypatch.setattr(budget, "_last_flush", time.monotonic())  # inside the window
+    budget.record(10)
+    budget.record(10)
+    budget.forget()
+    assert budget.usage()["tokens"] == 0  # nothing was flushed yet
+    budget.record(10)
+    budget.flush()
+    budget.forget()
+    assert budget.usage()["tokens"] == 10
+
+
+def test_picks_up_other_instances_usage(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "daily_token_cap", 1000)
+    budget.usage()  # loads baseline 0
+    other = budget._connect()[0]  # a second instance writing to the shared db
+    other.execute("INSERT INTO usage_daily (day, tokens, cost_usd) VALUES (?, 900, 0) "
+                  "ON CONFLICT(day) DO UPDATE SET tokens = 900", [budget._day.isoformat()])
+    other.commit()
+    other.close()
+    monkeypatch.setattr(budget, "REFRESH_SECONDS", 0.0)
+    assert budget.usage()["tokens"] == 900
+
+
+def test_db_failure_falls_back_to_memory(monkeypatch) -> None:
+    def boom():
+        raise OSError("db down")
+
+    monkeypatch.setattr(budget, "_connect", boom)
+    monkeypatch.setattr(settings, "daily_token_cap", 1000)
+    budget.record(600)
+    budget.flush()  # must not raise
+    budget.ensure_available()
+    budget.record(500)
+    with pytest.raises(budget.DailyCapReached):
+        budget.ensure_available()
+    assert budget.usage()["tokens"] == 1100

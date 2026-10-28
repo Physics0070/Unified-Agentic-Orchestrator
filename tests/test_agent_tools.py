@@ -213,3 +213,41 @@ async def test_executor_runs_tool_loop_end_to_end(monkeypatch):
     rows = [e for e in store.events if e.event_type == EventType.TOOL_RESULT
             and "tool" not in e.payload]
     assert len(rows) == 1
+
+
+async def test_run_workspace_reaches_knowledge_lookup(monkeypatch):
+    from backend.handoff import artifact_store
+    from backend.rag import knowledge_base
+
+    async def put(*a, **k):
+        return None
+
+    monkeypatch.setattr(artifact_store, "put", put)
+    knowledge_base.get("ws-run-test").add_document("notes.txt", "The launch codename is Zephyrwind.")
+    agent = AgentSpec(id="a", role="r", system_contract="c", tools=["knowledge_lookup"],
+                      model="groq:x", output_schema={"type": "object"})
+    graph = GraphSpec(nodes=[Node(id="n", type="agent", agent=agent)], edges=[])
+
+    async def run(workspace_id):
+        fake = FakeAdapter([tool_turn("knowledge_lookup", {"query": "launch codename"}),
+                            final(json.dumps({"ok": True}))])
+        res = await Executor(MemStore(), graph, "r", completer=fake,
+                             workspace_id=workspace_id).run()
+        assert res.ok
+        return json.dumps(fake.calls[1]["messages"])
+
+    assert "Zephyrwind" in await run("ws-run-test")
+    assert "Zephyrwind" not in await run("")
+
+
+def test_run_request_workspace_id_validated():
+    from pydantic import ValidationError
+
+    from backend.api.schemas import RunRequest
+
+    graph = {"nodes": [], "edges": []}
+    goal = "summarise the quarterly report"
+    assert RunRequest(goal=goal, graph=graph).workspace_id is None
+    assert RunRequest(goal=goal, graph=graph, workspace_id="ab_c-1").workspace_id == "ab_c-1"
+    with pytest.raises(ValidationError):
+        RunRequest(goal=goal, graph=graph, workspace_id="bad id/..")
