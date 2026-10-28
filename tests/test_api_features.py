@@ -112,7 +112,7 @@ def test_upload_list_query_delete_round_trip():
     r = _upload()
     assert r.status_code == 200
     assert r.json()["document"]["name"] == "locking.md"
-    assert r.json()["persistent"] is False
+    assert r.json()["persistent"] is True  # durable storage active
 
     docs = client.get("/api/knowledge/documents", params={"workspace_id": WS}).json()
     assert [d["name"] for d in docs["documents"]] == ["locking.md"]
