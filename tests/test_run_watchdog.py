@@ -132,3 +132,40 @@ def test_store_operation_timeout_raises_instead_of_hanging(monkeypatch):
             await s.create_run("r", GOAL, "h", 1, {}, "pending")
 
     asyncio.run(go())
+
+
+def test_a_finished_run_is_not_failed_by_slow_bookkeeping(monkeypatch, tmp_path):
+    """Workflow DNA recording runs after the executor; it must not be under the watchdog."""
+    import asyncio
+
+    from backend.api import routes
+    from backend.config import settings
+    from backend.council.compiler import build_graph
+    from backend.events.store import EventStore
+
+    class Quick:
+        def __init__(self, store, graph, run_id, **kw):
+            self.store, self.run_id = store, run_id
+
+        async def run(self):
+            await self.store.append_and_set_status(
+                self.run_id, routes.EventType.RUN_END, {"ok": True}, status="done", ended=True)
+
+    async def slow_dna(*a, **k):
+        await asyncio.sleep(1.5)
+
+    monkeypatch.setattr(settings, "turso_database_url", f"file:{tmp_path / 'w.db'}")
+    monkeypatch.setattr(settings, "run_timeout_s", 1)
+    monkeypatch.setattr(routes, "Executor", Quick)
+    monkeypatch.setattr(routes, "record_and_log", slow_dna)
+    g = build_graph([{"id": "a", "role": "A"}], ["ollama:x:1"], verifier_model="ollama:x:1",
+                    intent="explain")
+
+    async def go():
+        async with EventStore() as s:
+            await s.create_run("r1", "goal goal goal", g.config_hash, 1, g.model_dump(), "running")
+        await routes._execute_run("r1", g, "goal goal goal", 1, set(), "", None)
+        async with EventStore() as s:
+            return await s.get_run("r1")
+
+    assert asyncio.run(go()).status == "done"
