@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from pydantic import BaseModel
 
 from backend.engine.spec import GraphSpec, Node
+from backend.engine.tools import complete_with_tools, register_tools
 from backend.events import EventStore, EventType
 from backend.handoff import repair_loop
 from backend.memory import DEFAULT_MEMORY_TTL_S, memory_store
@@ -74,6 +75,7 @@ class Executor:
         clarifications: dict | None = None,
         depth: int = 0,
         goal: str = "",
+        workspace_id: str = "",
     ) -> None:
         self.store = store
         self.graph = graph
@@ -89,6 +91,9 @@ class Executor:
         self.outputs: dict[str, dict | list] = {}
         self.results: dict[str, NodeResult] = {}
         self.guard = CapabilityGuard(store, run_id)
+        # Knowledge workspace the knowledge_lookup tool searches ("" = none).
+        self.workspace_id = workspace_id
+        register_tools(self.guard, workspace_id)
         # 0 for the top-level executor of a run; a subgraph node's child
         # executor is constructed with depth+1. A constructor param, not a
         # class-level counter - separate runs execute as concurrent asyncio
@@ -293,7 +298,7 @@ class Executor:
             self.store, node.subgraph, self.run_id,
             seed=self.seed, completer=self.completer,
             approvals=self.approvals, clarifications=self.clarifications,
-            depth=self.depth + 1, goal=self.goal,
+            depth=self.depth + 1, goal=self.goal, workspace_id=self.workspace_id,
         )
         parent_ctx = self._upstream_context(node.id)
         if parent_ctx:
@@ -392,10 +397,12 @@ class Executor:
             if remaining <= 0:
                 raise BudgetExceeded(f"{agent.id} exhausted {agent.budget_tokens} tokens")
 
-            c = await self.completer(
-                agent.model, messages,
-                fallback_model=agent.fallback_model,
-                seed=self.seed, temperature=0.0, max_tokens=min(remaining, 1024),
+            # Plain single completion unless the agent declared tools the
+            # provider can call natively; see engine/tools.py.
+            c = await complete_with_tools(
+                self.completer, self.guard, agent, messages,
+                max_tokens=min(remaining, 1024),
+                seed=self.seed, temperature=0.0,
                 store=self.store, run_id=self.run_id, node_id=node.id, agent_id=agent.id,
             )
             # The engine records every completion, whatever produced it. Replay

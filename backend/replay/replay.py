@@ -85,6 +85,8 @@ async def recorded_completions(
             continue
         if e.payload.get("replayed"):
             continue
+        if "tool" in e.payload:
+            continue  # a guarded tool execution, not a model completion
         out[(e.node_id, e.agent_id)].append({
             "text": e.payload.get("text", ""),
             "model": e.payload.get("model", ""),
