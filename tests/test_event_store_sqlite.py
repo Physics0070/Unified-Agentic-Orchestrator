@@ -54,3 +54,56 @@ def test_blank_url_uses_sqlite(monkeypatch):
 
     monkeypatch.setattr(settings, "turso_database_url", "")
     assert EventStore()._sqlite
+
+
+def test_many_stores_opening_at_once_do_not_collide_on_the_migration(tmp_path):
+    """Every request opens its own store; the migration drops and recreates the
+    append-only triggers, so concurrent opens used to crash with 'trigger already
+    exists'. Open a burst of fresh stores against one file while others append."""
+    from backend.events import store as store_mod
+
+    store_mod._MIGRATED.clear()
+
+    async def one(i):
+        async with _store(tmp_path) as s:
+            if i == 0:
+                await _run(s)
+            return i
+
+    async def go():
+        assert sorted(await asyncio.gather(*(one(i) for i in range(24)))) == list(range(24))
+        async with _store(tmp_path) as s:  # still append-only afterwards
+            await s.append("r1", "RUN_START")
+            with pytest.raises(EventStoreError):
+                await s._execute("DELETE FROM events")
+
+    asyncio.run(go())
+
+
+def test_an_unwritable_location_is_an_event_store_error_not_a_raw_exception(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")  # a file where a directory is needed
+
+    async def go():
+        with pytest.raises(EventStoreError, match="could not be opened"):
+            async with EventStore(url=f"file:{blocker}/sub/events.db"):
+                pass
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [("", "data/events.db"), ("file:", "data/events.db"), ("file:rel/e.db", "rel/e.db")],
+)
+def test_sqlite_path_parsing(url, expected):
+    from backend.events.store import _sqlite_path
+
+    assert _sqlite_path(url) == expected
+
+
+def test_file_uri_with_slashes_resolves_to_an_absolute_path(tmp_path):
+    from backend.events.store import _sqlite_path
+
+    p = (tmp_path / "e.db").resolve()
+    assert _sqlite_path(p.as_uri()) == str(p)

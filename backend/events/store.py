@@ -22,10 +22,13 @@ import asyncio
 import json
 import logging
 import sqlite3
+import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import turso_serverless
 
@@ -36,6 +39,25 @@ log = logging.getLogger("aco.events")
 
 _MIGRATION = Path(__file__).resolve().parents[2] / "migrations" / "001_events.sql"
 _DEFAULT_SQLITE = "data/events.db"  # `data/` is git-ignored
+
+# The migration drops and recreates the append-only triggers, so two stores
+# running it at once collide ("trigger already exists"), and between the DROP and
+# the CREATE the log is briefly not append-only. Every request opens its own
+# EventStore, so it runs once per database file per process, under a lock.
+# ponytail: per process - several worker processes starting on one fresh file
+# could still race once; give each worker a pre-migrated file if that matters.
+_MIGRATED: set[str] = set()
+_MIGRATE_LOCK = threading.Lock()
+_WARNED_FALLBACK = False
+
+
+def _sqlite_path(url: str) -> str:
+    """`file:rel/path`, `file:///abs/path` (and `file:///C:/x` on Windows)."""
+    if not url:
+        return _DEFAULT_SQLITE
+    if url.startswith("file://"):
+        return url2pathname(urlparse(url).path) or _DEFAULT_SQLITE
+    return url[len("file:"):] or _DEFAULT_SQLITE
 
 
 class EventStoreError(RuntimeError):
@@ -53,7 +75,16 @@ class EventStore:
         # Blank URL or `file:` => local stdlib sqlite3, no Turso account needed.
         self._sqlite = not self._url or self._url.startswith("file:")
         if self._sqlite:
-            self._path = (self._url or "")[len("file:"):] or _DEFAULT_SQLITE
+            self._path = _sqlite_path(self._url or "")
+            global _WARNED_FALLBACK
+            if not self._url and not _WARNED_FALLBACK:
+                _WARNED_FALLBACK = True
+                log.warning(
+                    "TURSO_DATABASE_URL is blank: using a local SQLite file at %s. On an "
+                    "ephemeral or read-only host (Render free, Vercel) the event log will "
+                    "not survive a redeploy - set TURSO_DATABASE_URL for durable history.",
+                    self._path,
+                )
         elif not self._token:
             raise EventStoreError("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set")
         # Guards the single shared connection: every operation goes through
@@ -65,12 +96,26 @@ class EventStore:
 
     async def __aenter__(self) -> Self:
         def _open_sqlite():
-            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
-            c = sqlite3.connect(self._path, check_same_thread=False, timeout=30)
-            c.execute("PRAGMA journal_mode = WAL")
-            c.execute("PRAGMA foreign_keys = ON")
-            c.executescript(_MIGRATION.read_text())  # idempotent
-            return c
+            try:
+                Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+                # The WAL switch needs an exclusive lock too, so a first open racing
+                # another one fails "database is locked" - serialise the whole setup.
+                with _MIGRATE_LOCK:
+                    c = sqlite3.connect(self._path, check_same_thread=False, timeout=30)
+                    c.execute("PRAGMA journal_mode = WAL")
+                    c.execute("PRAGMA foreign_keys = ON")
+                    if self._path not in _MIGRATED:
+                        c.executescript(_MIGRATION.read_text())
+                        _MIGRATED.add(self._path)
+                return c
+            except (OSError, sqlite3.Error) as e:
+                # Unwrapped, a read-only filesystem or a locked file escaped as
+                # a bare 500 instead of the 503 that tells you what is wrong.
+                log.error("sqlite event log %s could not be opened: %s", self._path, e)
+                raise EventStoreError(
+                    f"local event log could not be opened ({type(e).__name__}); "
+                    "set TURSO_DATABASE_URL, or point it at a writable file: path"
+                ) from e
 
         def _open():
             c = turso_serverless.connect(self._url, auth_token=self._token)

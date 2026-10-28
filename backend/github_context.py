@@ -22,7 +22,11 @@ router = APIRouter(prefix="/api/github")
 
 class ContextRequest(BaseModel):
     repo: str = Field(max_length=200)
-    token: str | None = Field(default=None, max_length=255, repr=False)
+    # GitHub tokens are ASCII (ghp_..., github_pat_...). Anything else would
+    # blow up inside httpx while encoding the header - a 500 - so refuse it here.
+    token: str | None = Field(
+        default=None, max_length=255, repr=False, pattern=r"^[A-Za-z0-9_\-.]+$"
+    )
 
 
 def _check(repo: str) -> str:
@@ -51,19 +55,25 @@ async def fetch_repo_context(
         headers["Authorization"] = f"Bearer {token}"
     try:
         async with httpx.AsyncClient(
-            base_url=_API, headers=headers, timeout=httpx.Timeout(8.0), transport=transport
+            base_url=_API, headers=headers, timeout=httpx.Timeout(8.0), transport=transport,
+            # A renamed or transferred repo answers 301. GitHub redirects within its
+            # own API, and httpx drops the Authorization header if one ever points
+            # at another origin.
+            follow_redirects=True,
         ) as c:
 
-            async def get(p: str, optional: bool = False):
+            async def get(p: str, missing: tuple[int, ...] = ()):
                 r = await c.get(f"/repos/{repo}{p}")
-                if r.status_code >= 400:
-                    if optional and r.status_code == 404:
-                        return None
+                if r.status_code in missing:
+                    return None
+                if r.status_code >= 300:
                     raise _fail(r)
                 return r.json()
 
             meta, readme, tree, commits = await asyncio.gather(
-                get(""), get("/readme", True), get("/contents", True), get("/commits?per_page=5")
+                get(""), get("/readme", (404,)), get("/contents", (404,)),
+                # 409 is GitHub's answer for a repository with no commits yet.
+                get("/commits?per_page=5", (409,)),
             )
     except httpx.HTTPError:
         raise HTTPException(502, "Could not reach api.github.com.") from None
@@ -80,7 +90,8 @@ async def fetch_repo_context(
             + ", ".join(e["name"] + ("/" if e.get("type") == "dir" else "") for e in tree[:40])
         )
     lines.append("Recent commits:")
-    lines += [f"- {c['sha'][:7]} {c['commit']['message'].splitlines()[0][:100]}" for c in commits]
+    for c in commits or []:
+        lines.append(f"- {c['sha'][:7]} {c['commit']['message'].splitlines()[0][:100]}")
     if readme and readme.get("encoding") == "base64":
         text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")
         lines += ["README:", text.strip()]

@@ -81,3 +81,42 @@ def test_network_error():
     with pytest.raises(HTTPException) as e:
         run("o/n", transport=httpx.MockTransport(boom))
     assert e.value.status_code == 502
+
+
+def test_a_redirected_repo_is_followed_not_a_500():
+    """A renamed or transferred repo answers 301; it used to fall through to
+    r.json() and crash."""
+    inner = _t()
+
+    def h(req: httpx.Request):
+        if req.url.path.startswith("/repos/old/name"):
+            target = "https://api.github.com/repos/o/n" + req.url.path[len("/repos/old/name"):]
+            return httpx.Response(301, headers={"Location": target})
+        return inner.handler(req)
+
+    out = run("old/name", transport=httpx.MockTransport(h))
+    assert out["repo"] == "o/n"
+
+
+def test_an_empty_repository_still_returns_context():
+    """GitHub answers 409 on /commits for a repo with no commits yet."""
+    inner = _t()
+
+    def h(req: httpx.Request):
+        if req.url.path.endswith("/commits"):
+            return httpx.Response(409, json={"message": "Git Repository is empty."})
+        return inner.handler(req)
+
+    out = run("o/n", transport=httpx.MockTransport(h))
+    assert "Recent commits:" in out["text"]
+
+
+@pytest.mark.parametrize("token", ["tökén", "has space", "line\nbreak", "ghp_ok\r"])
+def test_non_ascii_or_malformed_tokens_are_rejected_before_httpx(token):
+    from pydantic import ValidationError
+
+    from backend.github_context import ContextRequest
+
+    with pytest.raises(ValidationError):
+        ContextRequest(repo="o/n", token=token)
+    assert ContextRequest(repo="o/n", token="github_pat_11AB_cd-ef.gh").token  # noqa: S106

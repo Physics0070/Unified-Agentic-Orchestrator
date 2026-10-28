@@ -232,6 +232,12 @@ function renderMarkdown(src: string) {
   return out
 }
 
+/** The link target comes from model output. Only web and mail links are
+ * allowed; `javascript:` and `data:` URLs would run on click. */
+function safeHref(href: string): string {
+  return /^(https?:\/\/|mailto:)/i.test(href) ? href : '#'
+}
+
 function inline(text: string): React.ReactNode[] {
   // Split on `code`, **bold** and [text](url), keeping delimiters so they can be styled.
   return text
@@ -247,7 +253,7 @@ function inline(text: string): React.ReactNode[] {
       const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(part)
       if (link) {
         return (
-          <a key={i} href={link[2]} target="_blank" rel="noreferrer" className="chat-link">
+          <a key={i} href={safeHref(link[2])} target="_blank" rel="noreferrer" className="chat-link">
             {link[1]}
           </a>
         )
