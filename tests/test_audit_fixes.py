@@ -122,3 +122,36 @@ def test_a_secret_pasted_twice_uses_the_first_copy():
 
     s = Settings(turso_auth_token="abc.def\n\nabc.def")  # noqa: S106
     assert s.turso_auth_token == "abc.def"  # noqa: S105
+
+
+def test_run_finishes_inline_on_vercel(monkeypatch, tmp_path):
+    """Serverless freezes after the response, so the run must complete first."""
+    from fastapi.testclient import TestClient
+
+    from backend.api import routes
+    from backend.config import settings
+    from backend.council.compiler import build_graph
+    from backend.main import app
+
+    class Fast:
+        def __init__(self, store, graph, run_id, **kw):
+            self.store, self.run_id = store, run_id
+
+        async def run(self):
+            await self.store.set_run_status(self.run_id, "done", ended=True)
+
+    async def no_dna(*a, **k):
+        return None
+
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setattr(settings, "turso_database_url", f"file:{tmp_path / 'e.db'}")
+    monkeypatch.setattr(routes, "Executor", Fast)
+    monkeypatch.setattr(routes, "predict_and_log", no_dna)
+    monkeypatch.setattr(routes, "record_and_log", no_dna)
+    g = build_graph([{"id": "a", "role": "A"}], ["ollama:x:1"], verifier_model="ollama:x:1",
+                    intent="explain")
+    body = {"goal": "Compare REST and GraphQL", "graph": g.model_dump(), "approvals": ["approve"]}
+    r = TestClient(app).post("/api/runs", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "done"
+    assert routes._TASKS == {}
