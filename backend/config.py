@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     def _strip_pasted_whitespace(cls, v: str) -> str:
         # A trailing newline from a pasted secret makes the Authorization
         # header invalid and turns every request into a 500.
-        return v.strip()
+        parts = v.split()  # also tolerates a secret pasted twice in one value
+        return parts[0] if parts else ""
 
     # ---------- execution contract ----------
     max_repair_attempts: int = Field(default=2, ge=0, le=10)
