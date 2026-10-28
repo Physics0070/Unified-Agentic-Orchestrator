@@ -117,6 +117,11 @@ function RouteLegend() {
   )
 }
 
+const STREAM_FAILED = 'The answer stream failed'
+function isFailedTurn(t: Turn): boolean {
+  return !!t.error || t.answer.includes(STREAM_FAILED)
+}
+
 function deriveChatStatuses(turn: Turn): Record<string, NodeStatus> {
   const p = turn.plan
   const s: Record<string, NodeStatus> = {}
@@ -131,7 +136,7 @@ function deriveChatStatuses(turn: Turn): Record<string, NodeStatus> {
     s.join = turn.specialists.length >= p.specialists.length ? 'done' : 'pending'
   }
 
-  if (turn.error) s.answer = 'failed'
+  if (isFailedTurn(turn)) s.answer = 'failed'
   else if (turn.done) s.answer = 'done'
   else if (turn.answer || turn.status === 'answering') s.answer = 'running'
   else s.answer = 'pending'
@@ -632,24 +637,32 @@ export function ChatPanel({ models }: { models: string[] }) {
     setTurns(convo.turns.map((t) => ({ ...t, done: true, status: undefined })))
   }, [conversations])
 
-  const send = useCallback((question: string) => {
+  const send = useCallback((question: string, retryIndex?: number) => {
     const q = question.trim()
     if (!q || busy) return
 
     // History is the completed turns only; the in-flight one is not context yet.
-    const history: ChatMessage[] = turns.flatMap((t) =>
-      t.done && t.answer
+    // A retry only sees the turns before the failed one, and never failed answers.
+    const history: ChatMessage[] = turns.slice(0, retryIndex ?? turns.length).flatMap((t) =>
+      t.done && t.answer && !isFailedTurn(t)
         ? [{ role: 'user' as const, content: t.question },
            { role: 'assistant' as const, content: t.answer }]
         : [],
     )
 
     let index = 0
-    setTurns((prev) => {
-      index = prev.length
-      return [...prev, { question: q, answer: '', specialists: [], done: false }]
-    })
-    setInput('')
+    const fresh: Turn = { question: q, answer: '', specialists: [], done: false }
+    if (retryIndex != null) {
+      // Replace the failed assistant message in place; the user message is not duplicated.
+      index = retryIndex
+      setTurns((prev) => prev.map((t, j) => (j === retryIndex ? fresh : t)))
+    } else {
+      setTurns((prev) => {
+        index = prev.length
+        return [...prev, fresh]
+      })
+      setInput('')
+    }
     setBusy(true)
 
     abortRef.current = streamChat(
@@ -742,7 +755,12 @@ export function ChatPanel({ models }: { models: string[] }) {
               </div>
             )}
 
-            {t.answer && <div className="bubble-bot">{renderMarkdown(t.answer)}</div>}
+            {t.answer && (
+              <div className={`bubble-bot${isFailedTurn(t) ? ' is-failed' : ''}`}
+                style={isFailedTurn(t) ? { borderColor: '#f8717155', background: '#f871710f' } : undefined}>
+                {renderMarkdown(t.answer)}
+              </div>
+            )}
 
             {t.file && (
               <a
@@ -754,7 +772,12 @@ export function ChatPanel({ models }: { models: string[] }) {
               </a>
             )}
 
-            {t.error && <div className="turn-error">{t.error}</div>}
+            {t.error && <div className="turn-error" role="alert">{t.error}</div>}
+            {t.done && isFailedTurn(t) && (
+              <div style={{ marginTop: 8 }}>
+                <Button onClick={() => send(t.question, i)} disabled={busy}>Retry</Button>
+              </div>
+            )}
 
             <RouteLine turn={t} onOpen={() => setOpen(i)} />
           </article>

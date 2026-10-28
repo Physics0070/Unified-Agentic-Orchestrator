@@ -37,7 +37,7 @@ LABELS = {
 # that every one is enabled on every account - the connection test is the check.
 SUGGESTED = {
     "ollama": ["llama3.2:3b", "qwen2.5:7b", "gpt-oss:120b-cloud"],
-    "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+    "groq": ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
     "gemini": ["gemini-2.0-flash", "gemini-2.5-flash"],
     "openai": ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
     "openrouter": ["meta-llama/llama-3.3-70b-instruct:free"],

@@ -53,6 +53,14 @@ CATALOG: dict[str, ModelProfile] = {
         reasoning_logic=0.85, task_proficiency=0.80, context_relation=0.75,
         agentic_capability=0.80, factuality_safety=0.75, real_world_data=0.55,
     ),
+    "gpt-oss-120b": ModelProfile(
+        reasoning_logic=0.82, task_proficiency=0.78, context_relation=0.72,
+        agentic_capability=0.78, factuality_safety=0.70, real_world_data=0.50,
+    ),
+    "gpt-oss-20b": ModelProfile(
+        reasoning_logic=0.65, task_proficiency=0.62, context_relation=0.60,
+        agentic_capability=0.62, factuality_safety=0.58, real_world_data=0.45,
+    ),
     "llama-3.3-70b": ModelProfile(
         reasoning_logic=0.75, task_proficiency=0.75, context_relation=0.70,
         agentic_capability=0.65, factuality_safety=0.65, real_world_data=0.50,
@@ -202,6 +210,8 @@ class ModelEconomics(BaseModel):
 
 ECONOMICS: dict[str, ModelEconomics] = {
     "gpt-oss:120b-cloud": ModelEconomics(cost_per_mtok_usd=0.0, typical_latency_ms=3500),
+    "gpt-oss-120b": ModelEconomics(cost_per_mtok_usd=0.38, typical_latency_ms=700),
+    "gpt-oss-20b": ModelEconomics(cost_per_mtok_usd=0.19, typical_latency_ms=400),
     "llama-3.3-70b": ModelEconomics(cost_per_mtok_usd=0.69, typical_latency_ms=900),
     "llama-3.1-8b": ModelEconomics(cost_per_mtok_usd=0.065, typical_latency_ms=450),
     "gemini-2.0-flash": ModelEconomics(cost_per_mtok_usd=0.25, typical_latency_ms=1100),

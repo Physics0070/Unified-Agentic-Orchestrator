@@ -13,16 +13,16 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 
 from backend import __version__
 from backend.api import router as api_router
 from backend.config import settings
 from backend.events import EventStoreError
 from backend.github_context import router as github_router
+from backend.limiter import limiter
 from backend.providers.base import ProviderAdapter
 
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -30,8 +30,6 @@ log = logging.getLogger("aco")
 
 # Frontend build output, served for the single-origin deployment option.
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-
-limiter = Limiter(key_func=get_remote_address, default_limits=[settings.rate_limit_public])
 
 
 @asynccontextmanager

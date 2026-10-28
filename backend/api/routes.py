@@ -332,7 +332,7 @@ async def clarify(req: GoalRequest) -> dict:
     branches = [s.id for s in plan.specialists] or ["security", "quality", "docs"]
     return {
         "questions": [{"id": f"q{i}", "text": q} for i, q in enumerate(questions)],
-        "permission": permission_prompt(branches),
+        "permission": permission_prompt(branches, plan.intent),
         "plan": {"intent": plan.intent, "complexity": plan.complexity,
                  "rationale": plan.rationale, "source": plan.source,
                  "specialists": [{"id": s.id, "role": s.role} for s in plan.specialists]},

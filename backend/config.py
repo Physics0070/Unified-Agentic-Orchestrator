@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     turso_database_url: str = ""
     turso_auth_token: str = ""
 
+    @field_validator("turso_database_url", "turso_auth_token", mode="after")
+    @classmethod
+    def _strip_pasted_whitespace(cls, v: str) -> str:
+        # A trailing newline from a pasted secret makes the Authorization
+        # header invalid and turns every request into a 500.
+        return v.strip()
+
     # ---------- execution contract ----------
     max_repair_attempts: int = Field(default=2, ge=0, le=10)
     default_seed: int = 42
@@ -72,7 +79,7 @@ class Settings(BaseSettings):
     # Configuration rather than code, so switching a provider's models never
     # needs an edit to routes.py. OpenRouter is empty by default: its free tier
     # is unreliable enough that it only joins the mix when asked for.
-    groq_models: str = "llama-3.3-70b-versatile"
+    groq_models: str = "openai/gpt-oss-120b"
     gemini_models: str = "gemini-2.5-flash"
     openai_models: str = "gpt-4o-mini"
     openrouter_models: str = ""

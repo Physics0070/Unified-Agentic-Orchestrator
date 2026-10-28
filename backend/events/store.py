@@ -44,8 +44,9 @@ _DEFAULT_SQLITE = "data/events.db"  # `data/` is git-ignored
 # running it at once collide ("trigger already exists"), and between the DROP and
 # the CREATE the log is briefly not append-only. Every request opens its own
 # EventStore, so it runs once per database file per process, under a lock.
-# ponytail: per process - several worker processes starting on one fresh file
-# could still race once; give each worker a pre-migrated file if that matters.
+# Across processes the same script runs inside BEGIN IMMEDIATE, so sqlite's own
+# write lock makes the drop/create pair atomic and a second process waits (up to
+# the connect timeout) instead of colliding or seeing a trigger-less window.
 _MIGRATED: set[str] = set()
 _MIGRATE_LOCK = threading.Lock()
 _WARNED_FALLBACK = False
@@ -105,7 +106,10 @@ class EventStore:
                     c.execute("PRAGMA journal_mode = WAL")
                     c.execute("PRAGMA foreign_keys = ON")
                     if self._path not in _MIGRATED:
-                        c.executescript(_MIGRATION.read_text())
+                        # executescript commits first; BEGIN IMMEDIATE then takes the
+                        # write lock before any DDL, so other processes queue behind it.
+                        script = _MIGRATION.read_text()
+                        c.executescript(f"BEGIN IMMEDIATE;\n{script}\nCOMMIT;")
                         _MIGRATED.add(self._path)
                 return c
             except (OSError, sqlite3.Error) as e:
