@@ -480,8 +480,6 @@ async def _execute_run(run_id: str, graph: GraphSpec, goal: str, seed: int,
                         s, graph, run_id, seed=seed, approvals=approvals,
                         goal=goal, workspace_id=workspace_id,
                     ).run()
-                    # Workflow DNA: record the real outcome for future predictions.
-                    await record_and_log(s, graph, run_id, result, predicted_fitness)
             except TimeoutError:
                 if not watchdog.expired():
                     raise
@@ -490,6 +488,14 @@ async def _execute_run(run_id: str, graph: GraphSpec, goal: str, seed: int,
             except Exception:
                 log.exception("run %s crashed", run_id)
                 await s.set_run_status(run_id, "failed", ended=True)
+            else:
+                # Advisory bookkeeping runs after the executor, outside the
+                # watchdog: a run that finished must not be failed because this
+                # part ran past the limit.
+                try:
+                    await record_and_log(s, graph, run_id, result, predicted_fitness)
+                except Exception:
+                    log.warning("Workflow DNA recording failed for %s", run_id, exc_info=True)
     except Exception:
         # The store itself is unusable (or timed out): still try to end the run.
         log.exception("run %s lost its event store", run_id)

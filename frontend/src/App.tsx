@@ -230,6 +230,8 @@ export default function App() {
       setEvents((prev) => (prev.some((x) => x.seq === e.seq) ? prev : [...prev, e]))
     const finish = () => {
       setLive(false)
+      // One last full read, so the trace shows every event whatever the polling missed.
+      api.events(run_id).then((r) => r.events.forEach(addEvent)).catch(() => {})
       api.metrics(run_id).then(setMetrics).catch(() => {})
       api.output(run_id).then(setOutput).catch(() => {})
     }
