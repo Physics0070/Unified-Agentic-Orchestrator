@@ -167,3 +167,29 @@ def test_localhost_ollama_is_not_offered_on_vercel(monkeypatch):
     assert "ollama" not in configured_providers()
     monkeypatch.setattr(settings, "ollama_base_url", "https://ollama.example.com")
     assert "ollama" in configured_providers()
+
+
+async def test_gpt_oss_requests_low_reasoning_effort(monkeypatch):
+    import httpx
+
+    from backend.providers.groq import GroqAdapter
+    from backend.providers.secret_broker import clear_runtime_key, get_handle, set_runtime_key
+
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(req.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}],
+                                         "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+
+    set_runtime_key("groq", "gsk-test-1234567890abcdef")
+    a = GroqAdapter(get_handle("groq"))
+    monkeypatch.setattr(a, "_client", lambda t: httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://x"))
+    try:
+        await a.complete([{"role": "user", "content": "hi"}], "openai/gpt-oss-120b")
+    finally:
+        clear_runtime_key("groq")
+    assert seen["reasoning_effort"] == "low"
