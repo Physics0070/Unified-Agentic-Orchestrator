@@ -17,7 +17,7 @@ export function GitHubView({ repo, setRepo, onGoal, toast }: {
   toast: (t: string, tone?: 'ok' | 'warn') => void
 }) {
   const [input, setInput] = useState(repo ?? '')
-  const [token, setToken] = useState(() => { try { return sessionStorage.getItem('aco.gh.token') ?? '' } catch { return '' } })
+  const [token, setToken] = useState('')
   const [data, setData] = useState<{ repo: Repo; commits: Commit[]; pulls: Pull[]; left: string | null } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -59,7 +59,6 @@ export function GitHubView({ repo, setRepo, onGoal, toast }: {
   const connect = () => {
     const full = parse(input)
     if (!full) { setErr('Enter owner/name or a github.com URL.'); return }
-    try { token ? sessionStorage.setItem('aco.gh.token', token) : sessionStorage.removeItem('aco.gh.token') } catch { /* private mode */ }
     load(full)
   }
 
@@ -75,7 +74,7 @@ export function GitHubView({ repo, setRepo, onGoal, toast }: {
         <summary className="cursor-pointer">Private repo or rate-limited? Add a token</summary>
         <input type="password" value={token} onChange={(e) => setToken(e.target.value)} aria-label="GitHub token" placeholder="read-only personal access token"
           className="mt-2 w-full max-w-[420px] h-9 max-md:h-10 max-md:text-[16px] px-3 font-mono text-[12px] bg-[var(--color-surface-2)] border border-[var(--color-line)] outline-none" />
-        <p className="mt-1">Kept in this tab's session storage only: it is gone when the tab closes and is sent to api.github.com and nowhere else.</p>
+        <p className="mt-1">Held in memory only, never saved: it is gone when you reload. It is sent to this app's server, which forwards it to api.github.com for that request and does not log or store it.</p>
       </details>
 
       {err && <p role="alert" className="mb-4 text-[12px] text-[var(--color-failed)]">{err}</p>}
