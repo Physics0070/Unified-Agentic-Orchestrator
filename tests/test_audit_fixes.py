@@ -108,3 +108,10 @@ def _reset_limiter():
     limiter.reset()
     yield
     limiter.reset()
+
+
+def test_pasted_turso_secrets_are_stripped():
+    from backend.config import Settings
+
+    s = Settings(turso_database_url=" libsql://x.turso.io\n", turso_auth_token="tok\n ")  # noqa: S106
+    assert s.turso_database_url == "libsql://x.turso.io" and s.turso_auth_token == "tok"  # noqa: S105

@@ -13,6 +13,8 @@ from backend.providers.base import Completion, ProviderAdapter, ProviderError, T
 # Published Groq rates, USD per 1M tokens. Used only to report real spend; if a
 # model is missing we record 0 rather than guessing a number.
 RATES = {
+    "openai/gpt-oss-120b": (0.15, 0.60),
+    "openai/gpt-oss-20b": (0.075, 0.30),
     "llama-3.3-70b-versatile": (0.59, 0.79),
     "llama-3.1-8b-instant": (0.05, 0.08),
 }
