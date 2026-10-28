@@ -15,11 +15,14 @@ Three stages, each of which can be turned off and measured on its own:
    (idf-weighted term coverage and adjacent-pair matches) and near-duplicate
    overlap chunks are dropped.
 
-State is in memory, per workspace. Nothing is persisted: a deploy on an
-ephemeral disk would silently lose a file-backed store, and "your documents
-vanished" is worse when it is unannounced. The API reports this.
+The index is in memory, per workspace. Documents (name + text) are also written
+to the EventStore's database (see backend/rag/store.py) and the index is rebuilt
+lazily from there on first access, so uploads survive serverless cold starts.
+If that storage is unavailable the workspace still works in memory and the API
+reports `persistent: false` rather than pretending.
 """
 
+import logging
 import math
 import re
 import threading
@@ -30,6 +33,9 @@ from datetime import UTC, datetime
 
 from backend.config import settings
 from backend.rag.chunker import chunk_text
+from backend.rag.store import KnowledgeStore, KnowledgeStoreError
+
+log = logging.getLogger("aco.rag")
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 _STOP = frozenset(
@@ -87,8 +93,10 @@ class DocInfo:
 
 
 class Workspace:
-    def __init__(self, workspace_id: str) -> None:
+    def __init__(self, workspace_id: str, store: KnowledgeStore | None = None) -> None:
         self.workspace_id = workspace_id
+        self._store = store
+        self.persistent = False
         self.docs: dict[str, DocInfo] = {}
         self.chunks: list[Chunk] = []
         self._lock = threading.RLock()
@@ -97,6 +105,35 @@ class Workspace:
         self._avgdl = 0.0
         self._tfidf = None         # (vectorizer, matrix) - fuzzy leg
         self._embeddings = None    # numpy matrix aligned with self.chunks - semantic leg
+
+    # ------------------------------------------------------------- persistence
+
+    def load_from_store(self) -> None:
+        """Rebuild documents and chunks from durable storage (cold start)."""
+        if self._store is None:
+            return
+        try:
+            rows = self._store.load(self.workspace_id)
+        except KnowledgeStoreError:
+            self._store = None  # degrade to memory-only; summary() says persistent=False
+            return
+        with self._lock:
+            for r in rows:
+                pieces = chunk_text(r["text"])
+                if pieces:
+                    self._index_locked(r["doc_id"], r["name"], pieces)
+                    self.docs[r["doc_id"]] = DocInfo(
+                        r["doc_id"], r["name"], r["chars"], len(pieces), r["added_at"])
+            self.persistent = True
+            self._invalidate()
+
+    def _index_locked(self, doc_id: str, name: str, pieces: list[str]) -> None:
+        for i, piece in enumerate(pieces):
+            toks = tokenize(piece)
+            self.chunks.append(Chunk(
+                idx=len(self.chunks), doc_id=doc_id, doc_name=name, ordinal=i,
+                text=piece, tf=Counter(toks), length=len(toks),
+            ))
 
     # ------------------------------------------------------------- mutation
 
@@ -111,25 +148,33 @@ class Workspace:
                     "delete one first")
             if len(self.chunks) + len(pieces) > settings.knowledge_max_chunks:
                 raise KnowledgeError("workspace is full; delete a document first")
-            # Re-uploading a name replaces it instead of double-counting.
-            for d in [d for d in self.docs.values() if d.name == name]:
-                self._remove_locked(d.doc_id)
-
             doc_id = uuid.uuid4().hex[:12]
-            for i, piece in enumerate(pieces):
-                toks = tokenize(piece)
-                self.chunks.append(Chunk(
-                    idx=len(self.chunks), doc_id=doc_id, doc_name=name, ordinal=i,
-                    text=piece, tf=Counter(toks), length=len(toks),
-                ))
             info = DocInfo(doc_id, name, len(text), len(pieces),
                            datetime.now(UTC).isoformat(timespec="seconds"))
+            # Re-uploading a name replaces it instead of double-counting.
+            replaced = [d.doc_id for d in self.docs.values() if d.name == name]
+            if self._store is not None:
+                try:  # durable first: a failed save must not look like success
+                    self._store.replace(self.workspace_id, replaced,
+                                        {**info.to_dict(), "text": text})
+                except KnowledgeStoreError as e:
+                    raise KnowledgeError("could not save the document to storage") from e
+            for old in replaced:
+                self._remove_locked(old)
+            self._index_locked(doc_id, name, pieces)
             self.docs[doc_id] = info
             self._invalidate()
             return info
 
     def remove_document(self, doc_id: str) -> bool:
         with self._lock:
+            if doc_id not in self.docs:
+                return False
+            if self._store is not None:
+                try:
+                    self._store.replace(self.workspace_id, [doc_id], None)
+                except KnowledgeStoreError as e:
+                    raise KnowledgeError("could not delete the document from storage") from e
             return self._remove_locked(doc_id)
 
     def _remove_locked(self, doc_id: str) -> bool:
@@ -295,7 +340,7 @@ class Workspace:
             return {"workspace_id": self.workspace_id,
                     "documents": [d.to_dict() for d in self.docs.values()],
                     "chunks": len(self.chunks),
-                    "persistent": False,
+                    "persistent": self.persistent,
                     "semantic_backend": self._semantic_backend()}
 
 
@@ -307,20 +352,35 @@ class KnowledgeBase:
     """Workspaces by id, least-recently-used evicted past MAX_WORKSPACES so an
     open endpoint cannot be used to grow memory without bound."""
 
-    def __init__(self) -> None:
+    def __init__(self, store: "KnowledgeStore | None | str" = "auto") -> None:
+        # "auto": use the EventStore's database per current settings; None: memory only.
+        self._store_arg = store
         self._spaces: OrderedDict[str, Workspace] = OrderedDict()
         self._lock = threading.Lock()
+
+    def _resolve_store(self) -> KnowledgeStore | None:
+        if self._store_arg != "auto":
+            return self._store_arg  # type: ignore[return-value]
+        url, token = settings.turso_database_url, settings.turso_auth_token
+        try:
+            return KnowledgeStore(url, token)
+        except KnowledgeStoreError:
+            return None
 
     def get(self, workspace_id: str, *, create: bool = True) -> Workspace | None:
         if not _WORKSPACE_ID.match(workspace_id or ""):
             raise KnowledgeError("workspace_id must be 1-64 letters, digits, '-' or '_'")
         with self._lock:
             ws = self._spaces.get(workspace_id)
-            if ws is None and create:
-                ws = Workspace(workspace_id)
-                self._spaces[workspace_id] = ws
-                while len(self._spaces) > MAX_WORKSPACES:
-                    self._spaces.popitem(last=False)
+            if ws is None:
+                # Cold start (or evicted): rebuild from durable storage.
+                cand = Workspace(workspace_id, self._resolve_store())
+                cand.load_from_store()
+                if create or cand.docs:
+                    ws = cand
+                    self._spaces[workspace_id] = ws
+                    while len(self._spaces) > MAX_WORKSPACES:
+                        self._spaces.popitem(last=False)
             if ws is not None:
                 self._spaces.move_to_end(workspace_id)
             return ws
