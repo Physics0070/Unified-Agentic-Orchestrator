@@ -155,3 +155,15 @@ def test_run_finishes_inline_on_vercel(monkeypatch, tmp_path):
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "done"
     assert routes._TASKS == {}
+
+
+def test_localhost_ollama_is_not_offered_on_vercel(monkeypatch):
+    from backend.config import settings
+    from backend.providers.secret_broker import configured_providers
+
+    monkeypatch.setattr(settings, "ollama_base_url", "http://localhost:11434")
+    assert "ollama" in configured_providers()
+    monkeypatch.setenv("VERCEL", "1")
+    assert "ollama" not in configured_providers()
+    monkeypatch.setattr(settings, "ollama_base_url", "https://ollama.example.com")
+    assert "ollama" in configured_providers()

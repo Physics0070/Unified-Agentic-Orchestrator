@@ -37,7 +37,12 @@ class ProviderHandle:
     @property
     def configured(self) -> bool:
         """Local providers need no key; remote ones do."""
-        return self.provider == "ollama" or bool(self._secret)
+        if self.provider == "ollama":
+            # A function on Vercel has no localhost Ollama; offering it sends
+            # agents to a model that can never answer.
+            local = any(h in self.base_url for h in ("localhost", "127.0.0.1"))
+            return not (os.environ.get("VERCEL") and local)
+        return bool(self._secret)
 
     def auth_headers(self) -> dict[str, str]:
         """Built at call time, handed straight to httpx, never stored.
