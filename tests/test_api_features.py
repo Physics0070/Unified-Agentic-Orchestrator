@@ -268,3 +268,70 @@ def test_a_missing_event_log_is_a_503_that_names_the_fix_not_a_bare_500(monkeypa
     r = client.get("/api/runs")
     assert r.status_code == 503
     assert r.json()["error"] == "event_log_unavailable" and "TURSO" in r.json()["message"]
+
+
+# ------------------------------------------------------------ access control
+
+def test_list_all_runs_requires_admin_token(monkeypatch):
+    monkeypatch.setattr(settings, "admin_token", "s3cret")
+    assert client.get("/api/runs").status_code == 401
+    assert client.get("/api/runs", headers={"X-Admin-Token": "bad"}).status_code == 401
+    ok = client.get("/api/runs", headers={"X-Admin-Token": "s3cret"})
+    assert ok.status_code == 200 and "runs" in ok.json()
+
+
+def test_list_all_runs_refused_in_prod_without_token(monkeypatch):
+    monkeypatch.setattr(settings, "admin_token", "")
+    monkeypatch.setattr(settings, "secret_key", "")
+    monkeypatch.setattr(settings, "app_env", "prod")
+    assert client.get("/api/runs").status_code == 403
+
+
+def test_runs_ids_filter_returns_only_requested(monkeypatch):
+    monkeypatch.setattr(settings, "admin_token", "s3cret")
+    import uuid as _uuid
+
+    mine, other, missing = (str(_uuid.uuid4()) for _ in range(3))
+
+    class Row:
+        def __init__(self, i):
+            self.i = i
+
+        def model_dump(self):
+            return {"run_id": self.i}
+
+    class Store:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get_run(self, run_id):
+            return Row(run_id) if run_id in (mine, other) else None
+
+    monkeypatch.setattr(routes, "EventStore", Store)
+    r = client.get("/api/runs", params={"ids": f"{mine},{missing}"})
+    assert r.status_code == 200 and r.json() == {"runs": [{"run_id": mine}]}
+    assert client.get("/api/runs", params={"ids": "not-a-uuid"}).status_code == 400
+    too_many = ",".join(str(_uuid.uuid4()) for _ in range(51))
+    assert client.get("/api/runs", params={"ids": too_many}).status_code == 400
+
+
+def test_short_workspace_ids_are_rejected_with_400():
+    assert client.get("/api/knowledge/documents",
+                      params={"workspace_id": "short"}).status_code == 400
+    assert client.post("/api/knowledge/query",
+                       json={"workspace_id": "short", "query": "x y"}).status_code == 400
+    assert client.delete("/api/knowledge/documents/abc",
+                         params={"workspace_id": "short"}).status_code == 400
+
+
+def test_security_headers_on_api_responses():
+    r = client.get("/health")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert r.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert "camera=()" in r.headers["permissions-policy"]
+    csp = r.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp and "script-src 'self'" in csp

@@ -78,7 +78,7 @@ class ChatRequest(BaseModel):
     priority: Literal["balanced", "quality", "speed", "cost"] = "balanced"
     # Which uploaded-documents workspace to retrieve from. None or no uploads
     # means no retrieval, same as before the knowledge workspace existed.
-    workspace_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    workspace_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,64}$")
     use_knowledge: bool = True
 
     @field_validator("message")
@@ -134,7 +134,7 @@ class ProviderTest(BaseModel):
 
 
 class KnowledgeQuery(BaseModel):
-    workspace_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    workspace_id: str = Field(min_length=1, max_length=200)
     query: str = Field(min_length=1, max_length=1000)
     top_k: int = Field(default=5, ge=1, le=20)
     mode: Literal["hybrid", "keyword", "semantic"] = "hybrid"
