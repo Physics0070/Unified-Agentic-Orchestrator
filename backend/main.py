@@ -1,5 +1,5 @@
-"""FastAPI entrypoint. Render web service - the frontend is a separate Netlify
-deploy, so nothing here serves a built frontend bundle by default.
+"""FastAPI entrypoint. One process serves the API and, when frontend/dist
+exists, the built React app (single-origin deployment, e.g. one Render service).
 
 Run from the repository root:
     uvicorn backend.main:app --host 0.0.0.0 --port $PORT
@@ -17,6 +17,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend import __version__
 from backend.api import router as api_router
@@ -164,8 +165,31 @@ app.include_router(api_router)
 app.include_router(github_router)
 
 
-# Mounted last so it cannot shadow /health or future /api routes.
-if FRONTEND_DIST.is_dir():
-    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
-else:
-    log.warning("frontend build not found at %s - serving API only", FRONTEND_DIST)
+class SPAStaticFiles(StaticFiles):
+    """StaticFiles plus single-page-app fallback.
+
+    An unknown non-API path returns index.html so client-side routes survive a
+    refresh. /api/* misses stay a real 404 (JSON), never an HTML page.
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            # `path` is os-normalised (backslashes on Windows), so use the URL path.
+            if exc.status_code != 404 or scope["path"].startswith("/api/"):
+                raise
+            return await super().get_response("index.html", scope)
+
+
+def mount_frontend(application: FastAPI, dist: Path) -> bool:
+    """Serve a built frontend from `dist`. Mounted last so it cannot shadow
+    /health or any /api route. Returns False (API only) when there is no build."""
+    if not (dist / "index.html").is_file():
+        log.warning("frontend build not found at %s - serving API only", dist)
+        return False
+    application.mount("/", SPAStaticFiles(directory=dist, html=True), name="frontend")
+    return True
+
+
+mount_frontend(app, FRONTEND_DIST)
