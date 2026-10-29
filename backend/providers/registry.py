@@ -77,7 +77,7 @@ async def complete(
     token counts, so cost and latency in the dashboard are measured, not
     estimated.
     """
-    budget.ensure_available()
+    budget.ensure_available(blocking=False)
     adapter, model = adapter_for(spec)
     try:
         async with _CALL_SLOTS:

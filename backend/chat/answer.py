@@ -101,13 +101,13 @@ async def stream_direct(
         *_history_messages(history or []),
         {"role": "user", "content": question},
     ]
-    budget.ensure_available()
-    budget.record(budget.estimate_tokens(str(messages)))
+    budget.ensure_available(blocking=False)
+    budget.record(budget.estimate_tokens(str(messages)), defer_flush=True)
     yielded = False
     try:
         async for piece in adapter.stream(messages, name, temperature=temperature):
             yielded = True
-            budget.record(budget.estimate_tokens(piece))
+            budget.record(budget.estimate_tokens(piece), defer_flush=True)
             yield piece
     except Exception as e:
         if yielded or not fallback_model:
@@ -116,7 +116,7 @@ async def stream_direct(
                     model, e, fallback_model)
         fb_adapter, fb_name = adapter_for(fallback_model)
         async for piece in fb_adapter.stream(messages, fb_name, temperature=temperature):
-            budget.record(budget.estimate_tokens(piece))
+            budget.record(budget.estimate_tokens(piece), defer_flush=True)
             yield piece
 
 
@@ -174,13 +174,13 @@ async def stream_synthesis(
         *_history_messages(history or []),
         {"role": "user", "content": f"Question:\n{question}\n\nSpecialist notes:\n{notes}"},
     ]
-    budget.ensure_available()
-    budget.record(budget.estimate_tokens(str(messages)))
+    budget.ensure_available(blocking=False)
+    budget.record(budget.estimate_tokens(str(messages)), defer_flush=True)
     yielded = False
     try:
         async for piece in adapter.stream(messages, name, temperature=0.3):
             yielded = True
-            budget.record(budget.estimate_tokens(piece))
+            budget.record(budget.estimate_tokens(piece), defer_flush=True)
             yield piece
     except Exception as e:
         if yielded or not fallback_model:
@@ -189,7 +189,7 @@ async def stream_synthesis(
                     model, e, fallback_model)
         fb_adapter, fb_name = adapter_for(fallback_model)
         async for piece in fb_adapter.stream(messages, fb_name, temperature=0.3):
-            budget.record(budget.estimate_tokens(piece))
+            budget.record(budget.estimate_tokens(piece), defer_flush=True)
             yield piece
 
 

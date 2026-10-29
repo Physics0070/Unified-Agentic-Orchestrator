@@ -14,7 +14,9 @@ def _isolated_knowledge_storage(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "turso_database_url", f"file:{tmp_path / 'knowledge.db'}")
     monkeypatch.setattr(settings, "turso_auth_token", "")
     knowledge_base._spaces.clear()
+    knowledge_base._empty.clear()
     budget.forget()
     yield
     knowledge_base._spaces.clear()
+    knowledge_base._empty.clear()
     budget.forget()
