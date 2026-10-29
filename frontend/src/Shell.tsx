@@ -4,6 +4,7 @@
  * lists and callbacks - which is why a new view costs one entry in each list.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { AuthUser } from './api'
 import { ago, type RunRecord } from './store'
 import { Icon, type IconName } from './ui'
 import './bubble.css'
@@ -66,7 +67,7 @@ function Section({ title, open, children }: { title: string; open: boolean; chil
   )
 }
 
-export function Sidebar({ open, onToggle, view, onView, onNewRun, runs, onOpenRun, counts, repo, backend }: {
+export function Sidebar({ open, onToggle, view, onView, onNewRun, runs, onOpenRun, counts, repo, backend, user, onAccount }: {
   open: boolean
   onToggle: () => void
   view: View
@@ -77,6 +78,8 @@ export function Sidebar({ open, onToggle, view, onView, onNewRun, runs, onOpenRu
   counts: { artifacts: number; runs: number }
   repo: string | null
   backend: { ok: boolean | null; ms: number | null }
+  user: AuthUser | null
+  onAccount: () => void
 }) {
   const narrow = useNarrow()
   const asideRef = useRef<HTMLElement>(null)
@@ -91,7 +94,7 @@ export function Sidebar({ open, onToggle, view, onView, onNewRun, runs, onOpenRu
   }, [drawer]) // eslint-disable-line react-hooks/exhaustive-deps
   // On a phone choosing something is the end of the drawer's job.
   const done = <A extends unknown[]>(f: (...a: A) => void) => (...a: A) => { f(...a); if (narrow) onToggle() }
-  if (narrow) { onView = done(onView); onNewRun = done(onNewRun); onOpenRun = done(onOpenRun) }
+  if (narrow) { onView = done(onView); onNewRun = done(onNewRun); onOpenRun = done(onOpenRun); onAccount = done(onAccount) }
   if (narrow && !open) {
     return (
       <button onClick={onToggle} aria-label="Show sidebar" title="Show sidebar"
@@ -181,6 +184,7 @@ export function Sidebar({ open, onToggle, view, onView, onNewRun, runs, onOpenRu
       <div className="shrink-0 border-t border-[var(--color-line)] py-1.5">
         <NavButton icon="sliders" label="Customize" open={open} active={view === 'customize'} onClick={() => onView('customize')} />
         <NavButton icon="gear" label="Settings" open={open} active={view === 'settings'} onClick={() => onView('settings')} />
+        <NavButton icon="user" label={user ? user.email : 'Sign in'} open={open} onClick={onAccount} />
         <div className="flex items-center gap-3 h-8 px-[22px] font-mono text-[10px] text-[var(--color-ink-faint)] whitespace-nowrap" title={dotLabel}>
           <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: dot }} />
           {open && dotLabel}

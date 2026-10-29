@@ -53,6 +53,37 @@ _DEFAULT_SQLITE = "data/events.db"  # `data/` is git-ignored
 _MIGRATED: set[str] = set()
 _MIGRATE_LOCK = threading.Lock()
 _WARNED_FALLBACK = False
+# Databases whose `runs` table is known to have the nullable `user_id` column
+# (accounts). Added lazily, once per process, by `_ensure_user_column`; the value
+# is False when the ALTER could not be applied, in which case every query falls
+# back to the pre-accounts SQL so a permissions problem cannot take runs down.
+_USER_COL: dict[str, bool] = {}
+
+
+def _ensure_user_column(c, key: str) -> bool:
+    """`ALTER TABLE runs ADD COLUMN user_id TEXT`, guarded for already-exists.
+
+    Appending a nullable column leaves the append-only triggers (on `events`)
+    and every existing row untouched. Works the same on sqlite and Turso.
+    """
+    if key in _USER_COL:
+        return _USER_COL[key]
+    ok = False
+    try:
+        c.execute("ALTER TABLE runs ADD COLUMN user_id TEXT")
+        ok = True
+    except Exception as e:  # sqlite3.Error or the turso driver's own errors
+        if "duplicate column" in str(e).lower():
+            ok = True
+        else:
+            log.warning("runs.user_id could not be added (%s: %s); per-user runs are off",
+                        type(e).__name__, e)
+    try:
+        c.commit()
+    except Exception:  # noqa: S110 - autocommit connections have nothing to commit
+        pass
+    _USER_COL[key] = ok
+    return ok
 
 
 def _sqlite_path(url: str) -> str:
@@ -233,6 +264,14 @@ class EventStore:
         # different worker threads asyncio.to_thread hands calls to.
         self._lock = asyncio.Lock()
         self._conn_obj: Any = None
+        # Set when the connection opens: does `runs` have a user_id column?
+        self._has_user = False
+
+    @property
+    def _uid_col(self) -> str:
+        """SELECT-list fragment: the real column, or NULL on a database that
+        could not take the ALTER."""
+        return "user_id" if self._has_user else "NULL"
 
     async def __aenter__(self) -> Self:
         def _open_sqlite():
@@ -250,6 +289,7 @@ class EventStore:
                         script = _MIGRATION.read_text()
                         c.executescript(f"BEGIN IMMEDIATE;\n{script}\nCOMMIT;")
                         _MIGRATED.add(self._path)
+                    self._has_user = _ensure_user_column(c, self._path)
                 return c
             except (OSError, sqlite3.Error) as e:
                 # Unwrapped, a read-only filesystem or a locked file escaped as
@@ -268,6 +308,8 @@ class EventStore:
                 self._url, auth_token=self._token, isolation_level=None
             )
             _install_keepalive(c._session, settings.db_op_timeout_s or None)
+            with _MIGRATE_LOCK:
+                self._has_user = _ensure_user_column(c, self._url)
             # No `PRAGMA foreign_keys = ON` here: every operation runs on a
             # throwaway Hrana stream (baton reset in `_run`, `_run_batch`), so a
             # per-connection pragma never applied to them - it only cost one
@@ -337,16 +379,20 @@ class EventStore:
         graph_spec: dict,
         status: str = "pending",
         replay_of: str | None = None,
+        user_id: str | None = None,
     ) -> RunRow:
-        """A run row must exist before any event: it owns the seq allocator."""
+        """A run row must exist before any event: it owns the seq allocator.
+        `user_id` records the signed-in owner; anonymous runs leave it NULL."""
         started_at = _now()
+        owned = bool(user_id) and self._has_user
 
         def _do(c):
             c.execute(
-                "INSERT INTO runs (run_id, goal, config_hash, seed, graph_spec, status, "
-                "replay_of, last_seq, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                "INSERT INTO runs (run_id, goal, config_hash, seed, graph_spec, status, "  # noqa: S608
+                "replay_of, last_seq, started_at" + (", user_id" if owned else "")
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?" + (", ?" if owned else "") + ")",
                 [run_id, goal, config_hash, seed, json.dumps(graph_spec), status,
-                 replay_of, started_at],
+                 replay_of, started_at, *([user_id] if owned else [])],
             )
             c.commit()
 
@@ -355,6 +401,7 @@ class EventStore:
             run_id=run_id, goal=goal, config_hash=config_hash, seed=seed,
             graph_spec=graph_spec, status=status, replay_of=replay_of,
             last_seq=0, started_at=started_at, ended_at=None,
+            user_id=user_id if owned else None,
         )
 
     async def record_run(
@@ -438,8 +485,8 @@ class EventStore:
     async def get_run(self, run_id: str) -> RunRow | None:
         def _do(c):
             cur = c.execute(
-                "SELECT run_id, goal, config_hash, seed, graph_spec, status, replay_of, "
-                "last_seq, started_at, ended_at FROM runs WHERE run_id = ?",
+                "SELECT run_id, goal, config_hash, seed, graph_spec, status, replay_of, "  # noqa: S608
+                f"last_seq, started_at, ended_at, {self._uid_col} FROM runs WHERE run_id = ?",
                 [run_id],
             )
             row = list(cur)
@@ -452,15 +499,21 @@ class EventStore:
         return RunRow(
             run_id=row[0], goal=row[1], config_hash=row[2], seed=row[3],
             graph_spec=json.loads(row[4]), status=row[5], replay_of=row[6],
-            last_seq=row[7], started_at=row[8], ended_at=row[9],
+            last_seq=row[7], started_at=row[8], ended_at=row[9], user_id=row[10],
         )
 
-    async def list_runs(self, limit: int = 25) -> list[RunRow]:
+    async def list_runs(self, limit: int = 25, user_id: str | None = None) -> list[RunRow]:
+        """Newest first. With `user_id`, only that user's runs."""
+        if user_id is not None and not self._has_user:
+            return []
+
         def _do(c):
+            where = " WHERE user_id = ?" if user_id is not None else ""
             cur = c.execute(
-                "SELECT run_id, goal, config_hash, seed, graph_spec, status, replay_of, "
-                "last_seq, started_at, ended_at FROM runs ORDER BY started_at DESC LIMIT ?",
-                [limit],
+                "SELECT run_id, goal, config_hash, seed, graph_spec, status, replay_of, "  # noqa: S608
+                f"last_seq, started_at, ended_at, {self._uid_col} FROM runs{where} "
+                "ORDER BY started_at DESC LIMIT ?",
+                [*([user_id] if user_id is not None else []), limit],
             )
             rows = list(cur)
             c.commit()
@@ -471,7 +524,7 @@ class EventStore:
             RunRow(
                 run_id=r[0], goal=r[1], config_hash=r[2], seed=r[3],
                 graph_spec=json.loads(r[4]), status=r[5], replay_of=r[6],
-                last_seq=r[7], started_at=r[8], ended_at=r[9],
+                last_seq=r[7], started_at=r[8], ended_at=r[9], user_id=r[10],
             )
             for r in rows
         ]

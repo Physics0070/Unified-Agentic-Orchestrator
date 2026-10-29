@@ -112,6 +112,13 @@ class Settings(BaseSettings):
     rate_runs_per_min: int = Field(default=5, gt=0)  # POST /runs and /compile
     rate_upload_per_min: int = Field(default=10, gt=0)
 
+    # ---------- user accounts (backend/auth.py) ----------
+    # False: accounts are optional and every anonymous flow works as before.
+    # True: orchestrator endpoints (runs, compile, clarify, knowledge) need a
+    # signed-in user; chat stays anonymous. Needs SECRET_KEY to sign sessions.
+    auth_required: bool = False
+    auth_session_days: int = Field(default=7, ge=1, le=90)
+
     # ---------- spend cap ----------
     # Global tokens per UTC day across all model calls; 0 = unlimited.
     daily_token_cap: int = Field(default=2_000_000, ge=0)

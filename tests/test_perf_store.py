@@ -99,6 +99,7 @@ def remote(monkeypatch, tmp_path):
     session = _FakeSession(db)
     monkeypatch.setattr(turso_serverless, "connect", lambda *a, **k: _FakeConn(session))
     monkeypatch.setattr(store_mod, "_install_keepalive", lambda *a, **k: None)
+    monkeypatch.setattr(store_mod, "_USER_COL", {})  # same fake URL, a fresh database each test
     store = EventStore(url="libsql://fake.example", token="test-token")  # noqa: S106
     return store, session, db
 

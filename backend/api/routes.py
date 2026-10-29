@@ -5,13 +5,25 @@ import hmac
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from sse_starlette.sse import EventSourceResponse
 
 from backend import budget
+from backend.api.auth_routes import router as auth_router
 from backend.api.schemas import (
     ApprovalRequest,
     ChatRequest,
@@ -25,6 +37,7 @@ from backend.api.schemas import (
     RouterExplain,
     RunRequest,
 )
+from backend.auth import User, gate_user, optional_user, scope_workspace
 from backend.chat.files import get_file
 from backend.config import settings
 from backend.council import clarifying_questions, compile_graph, permission_prompt
@@ -46,6 +59,8 @@ from backend.workflow_dna.orchestrator_hooks import predict_and_log, record_and_
 
 log = logging.getLogger("aco.api")
 router = APIRouter(prefix="/api")
+_WORKSPACE_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")  # same shape knowledge_base enforces
+router.include_router(auth_router)
 
 # In-flight runs, so cancel/pause can reach them. State of record is still the
 # event log; this is only a handle to the asyncio task.
@@ -81,6 +96,29 @@ def _require_models(models: list[str]) -> list[str]:
     if not models:
         raise HTTPException(status_code=503, detail=NO_MODELS)
     return models
+
+
+def _can_see(row, user: User | None) -> bool:
+    """Run ownership. Off unless AUTH_REQUIRED: then a run that has an owner is
+    visible to that owner only; ownerless (legacy/anonymous) runs stay open."""
+    if not settings.auth_required or row.user_id is None:
+        return True
+    return user is not None and user.id == row.user_id
+
+
+async def _owned_run(store: EventStore, run_id: str, user: User | None):
+    """The run row, 404 if unknown OR not the caller's (never 403: a stranger
+    must not learn that an id exists)."""
+    row = await store.get_run(run_id)
+    if row is None or not _can_see(row, user):
+        raise HTTPException(status_code=404, detail="unknown run")
+    return row
+
+
+async def _guard_run(store: EventStore, run_id: str, user: User | None) -> None:
+    """Ownership check that costs a read only when AUTH_REQUIRED is on."""
+    if settings.auth_required:
+        await _owned_run(store, run_id, user)
 
 
 @router.get("/models")
@@ -174,53 +212,74 @@ async def router_explain(req: RouterExplain) -> dict:
 # ------------------------------------------------------ knowledge workspace
 
 
-def _knowledge_summary(workspace_id: str) -> dict:
+def _knowledge_summary(workspace_id: str, scoped_id: str | None = None) -> dict:
     try:
-        ws = knowledge_base.get(workspace_id)
+        ws = knowledge_base.get(scoped_id or workspace_id)
     except KnowledgeError as e:
         raise HTTPException(400, str(e)) from e
-    return {**ws.summary(), "supported": SUPPORTED, "max_bytes": settings.max_upload_bytes}
+    # The caller's own id goes back out, never the per-user hash.
+    return {**ws.summary(), "workspace_id": workspace_id, "supported": SUPPORTED,
+            "max_bytes": settings.max_upload_bytes}
+
+
+def _scoped(user: User | None, workspace_id: str) -> str:
+    """The stored workspace id: a per-user hash when signed in. The id format is
+    validated on the raw value first, so a malformed id is still a 400."""
+    if not _WORKSPACE_ID.match(workspace_id or ""):
+        raise HTTPException(400, "workspace_id must be 8-64 letters, digits, '-' or '_'")
+    return scope_workspace(user, workspace_id) or workspace_id
 
 
 @router.get("/knowledge/documents")
-async def knowledge_documents(workspace_id: str) -> dict:
-    return await asyncio.to_thread(_knowledge_summary, workspace_id)
+async def knowledge_documents(
+    workspace_id: str, user: User | None = Depends(gate_user),  # noqa: B008
+) -> dict:
+    return await asyncio.to_thread(
+        _knowledge_summary, workspace_id, _scoped(user, workspace_id))
 
 
 @router.post("/knowledge/upload")
 @limiter.limit(lambda: f"{settings.rate_upload_per_min}/minute")
 async def knowledge_upload(request: Request, workspace_id: str = Form(...),
                            file: UploadFile = File(...),  # noqa: B008
+                           user: User | None = Depends(gate_user),  # noqa: B008
 ) -> dict:
+    scoped = _scoped(user, workspace_id)
     name = (file.filename or "upload").replace("\\", "/").rsplit("/", 1)[-1][:120]
     data = await file.read(settings.max_upload_bytes + 1)
     if len(data) > settings.max_upload_bytes:
         raise HTTPException(413, f"file is over the {settings.max_upload_bytes // 1024} KB limit")
     try:
-        ws = knowledge_base.get(workspace_id)
+        ws = knowledge_base.get(scoped)
         text = await asyncio.to_thread(parse_document, name, data)
         info = await asyncio.to_thread(ws.add_document, name, text)
     except (ParseError, KnowledgeError) as e:
         raise HTTPException(422, str(e)) from e
-    return {**(await asyncio.to_thread(_knowledge_summary, workspace_id)),
+    return {**(await asyncio.to_thread(_knowledge_summary, workspace_id, scoped)),
             "document": info.to_dict()}
 
 
 @router.delete("/knowledge/documents/{doc_id}")
-async def knowledge_delete(doc_id: str, workspace_id: str) -> dict:
+async def knowledge_delete(
+    doc_id: str, workspace_id: str, user: User | None = Depends(gate_user),  # noqa: B008
+) -> dict:
+    scoped = _scoped(user, workspace_id)
     try:
-        ws = knowledge_base.get(workspace_id, create=False)
+        ws = knowledge_base.get(scoped, create=False)
     except KnowledgeError as e:
         raise HTTPException(400, str(e)) from e
     if ws is None or not await asyncio.to_thread(ws.remove_document, doc_id):
         raise HTTPException(404, "no such document")
-    return await asyncio.to_thread(_knowledge_summary, workspace_id)
+    return await asyncio.to_thread(_knowledge_summary, workspace_id, scoped)
 
 
 @router.post("/knowledge/query")
-async def knowledge_query(req: KnowledgeQuery) -> dict:
+async def knowledge_query(
+    req: KnowledgeQuery, user: User | None = Depends(gate_user),  # noqa: B008
+) -> dict:
+    scoped = _scoped(user, req.workspace_id)
     try:
-        ws = knowledge_base.get(req.workspace_id, create=False)
+        ws = knowledge_base.get(scoped, create=False)
     except KnowledgeError as e:
         raise HTTPException(400, str(e)) from e
     if ws is None:
@@ -252,7 +311,10 @@ async def usage() -> dict:
 
 @router.post("/chat")
 @limiter.limit(lambda: f"{settings.rate_chat_per_min}/minute")
-async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
+async def chat(
+    req: ChatRequest, request: Request,
+    user: User | None = Depends(optional_user),  # noqa: B008
+) -> EventSourceResponse:
     """Ask anything, get an answer. SSE so the answer streams like a chat should.
 
     The turn also reports what it cost to produce - route taken, specialists
@@ -266,6 +328,10 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
     budget.ensure_available(blocking=False)
     models_ = _require_models(req.models or await _default_models())
     history = [m.model_dump() for m in req.history]
+    # Chat stays anonymous. A signed-in user retrieves from their own namespaced
+    # workspace; with AUTH_REQUIRED an anonymous caller gets no knowledge at all.
+    workspace_id = scope_workspace(user, req.workspace_id)
+    use_knowledge = req.use_knowledge and not (settings.auth_required and user is None)
 
     async def gen():
         # The event log is opened lazily by run_turn, only for its single
@@ -283,8 +349,8 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
                 req.message, history=history, models=models_, seed=req.seed,
                 open_store=open_store,
                 force_web_search=req.force_web_search, forced_model=req.forced_model,
-                priority=req.priority, workspace_id=req.workspace_id,
-                use_knowledge=req.use_knowledge,
+                priority=req.priority, workspace_id=workspace_id,
+                use_knowledge=use_knowledge,
             ):
                 if await request.is_disconnected():
                     return
@@ -338,7 +404,9 @@ async def chat_plan(req: ChatRequest) -> dict:
 
 
 @router.post("/clarify")
-async def clarify(req: GoalRequest) -> dict:
+async def clarify(
+    req: GoalRequest, _user: User | None = Depends(gate_user),  # noqa: B008
+) -> dict:
     """Ask about THIS goal, then ask permission. Nothing runs yet.
 
     The questions come from a planner that reads the goal. The fixed list is
@@ -364,13 +432,17 @@ async def clarify(req: GoalRequest) -> dict:
 
 @router.post("/compile")
 @limiter.limit(lambda: f"{settings.rate_runs_per_min}/minute")
-async def compile_endpoint(req: CompileRequest, request: Request) -> dict:
+async def compile_endpoint(
+    req: CompileRequest, request: Request,
+    user: User | None = Depends(gate_user),  # noqa: B008
+) -> dict:
     """Council designs the graph. Not executed until /runs is called."""
     budget.ensure_available()
     models_ = _require_models(req.models or await _default_models())
     async with EventStore() as store:
         run_id = str(uuid.uuid4())
-        await store.create_run(run_id, req.goal, "pending", req.seed, {}, "pending")
+        await store.create_run(run_id, req.goal, "pending", req.seed, {}, "pending",
+                               user_id=user.id if user else None)
         if req.answers:
             events = []
             for i, (q, a) in enumerate(req.answers.items()):
@@ -414,7 +486,10 @@ async def compile_endpoint(req: CompileRequest, request: Request) -> dict:
 
 @router.post("/runs")
 @limiter.limit(lambda: f"{settings.rate_runs_per_min}/minute")
-async def start_run(req: RunRequest, request: Request) -> dict:
+async def start_run(
+    req: RunRequest, request: Request,
+    user: User | None = Depends(gate_user),  # noqa: B008
+) -> dict:
     budget.ensure_available()
     # Migrate before reconstruction: a graph built or persisted under an older
     # schema version is walked forward to CURRENT_VERSION here, once, at the
@@ -431,7 +506,8 @@ async def start_run(req: RunRequest, request: Request) -> dict:
     run_id = str(uuid.uuid4())
     async with EventStore() as store:
         await store.create_run(
-            run_id, req.goal, graph.config_hash, req.seed, graph.model_dump(), "pending"
+            run_id, req.goal, graph.config_hash, req.seed, graph.model_dump(), "pending",
+            user_id=user.id if user else None,
         )
         await store.append(run_id, EventType.GRAPH_APPROVED,
                            payload={"config_hash": graph.config_hash})
@@ -453,7 +529,7 @@ async def start_run(req: RunRequest, request: Request) -> dict:
 
     _TASKS[run_id] = asyncio.create_task(
         _execute_run(run_id, graph, req.goal, req.seed, set(req.approvals),
-                     req.workspace_id or "", predicted_fitness)
+                     scope_workspace(user, req.workspace_id) or "", predicted_fitness)
     )
     return {**out, "status": "running"}
 
@@ -508,7 +584,10 @@ async def _execute_run(run_id: str, graph: GraphSpec, goal: str, seed: int,
 
 
 @router.post("/runs/{run_id}/execute")
-async def execute_run(run_id: str, req: ExecuteRequest) -> dict:
+async def execute_run(
+    run_id: str, req: ExecuteRequest,
+    user: User | None = Depends(gate_user),  # noqa: B008
+) -> dict:
     """Execute a run created by POST /runs (status 'pending'), inline.
 
     Used on serverless hosts, where POST /runs only creates the row. Goal, graph
@@ -518,7 +597,7 @@ async def execute_run(run_id: str, req: ExecuteRequest) -> dict:
     budget.ensure_available()
     async with EventStore() as store:
         row = await store.get_run(run_id)
-        if row is None:
+        if row is None or not _can_see(row, user):
             raise HTTPException(status_code=404, detail="unknown run")
         if row.status != "pending" or not row.graph_spec.get("nodes"):
             raise HTTPException(status_code=409, detail=f"run is {row.status}, not executable")
@@ -526,17 +605,20 @@ async def execute_run(run_id: str, req: ExecuteRequest) -> dict:
             raise HTTPException(status_code=409, detail="run already started")
     graph = GraphSpec(**migrate(row.graph_spec)).finalize()
     await _execute_run(run_id, graph, row.goal, row.seed, set(req.approvals),
-                       req.workspace_id or "", None)
+                       scope_workspace(user, req.workspace_id) or "", None)
     async with EventStore() as store:
         final = await store.get_run(run_id)
     return {"run_id": run_id, "status": final.status if final else "failed"}
 
 
 @router.post("/runs/{run_id}/approve")
-async def approve(run_id: str, req: ApprovalRequest) -> dict:
+async def approve(
+    run_id: str, req: ApprovalRequest, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     async with EventStore() as store:
         if await store.get_run(run_id) is None:
             raise HTTPException(status_code=404, detail="unknown run")
+        await _guard_run(store, run_id, user)
         await store.append(
             run_id,
             EventType.APPROVAL_GRANTED if req.granted else EventType.CANCEL,
@@ -545,12 +627,12 @@ async def approve(run_id: str, req: ApprovalRequest) -> dict:
     return {"ok": True}
 
 
-async def _live_run(store: EventStore, run_id: str):
+async def _live_run(store: EventStore, run_id: str, user: User | None = None):
     """404 for an unknown run, 409 for one that already ended - pause/resume/
     cancel used to write an event row for any id, which the foreign key turned
     into a 500, and silently "paused" runs that had already finished."""
     row = await store.get_run(run_id)
-    if row is None:
+    if row is None or not _can_see(row, user):
         raise HTTPException(status_code=404, detail="unknown run")
     if row.ended_at or row.status in ("done", "failed", "cancelled"):
         raise HTTPException(status_code=409, detail=f"run already {row.status}")
@@ -558,9 +640,11 @@ async def _live_run(store: EventStore, run_id: str):
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel(run_id: str) -> dict:
+async def cancel(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     async with EventStore() as store:
-        await _live_run(store, run_id)
+        await _live_run(store, run_id, user)
         task = _TASKS.get(run_id)
         if task:
             task.cancel()
@@ -570,18 +654,22 @@ async def cancel(run_id: str) -> dict:
 
 
 @router.post("/runs/{run_id}/pause")
-async def pause(run_id: str) -> dict:
+async def pause(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     async with EventStore() as store:
-        await _live_run(store, run_id)
+        await _live_run(store, run_id, user)
         await store.append(run_id, EventType.PAUSE, payload={"by": "user"})
         await store.set_run_status(run_id, "paused")
     return {"ok": True}
 
 
 @router.post("/runs/{run_id}/resume")
-async def resume(run_id: str) -> dict:
+async def resume(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     async with EventStore() as store:
-        await _live_run(store, run_id)
+        await _live_run(store, run_id, user)
         await store.append(run_id, EventType.RESUME, payload={"by": "user"})
         await store.set_run_status(run_id, "running")
     return {"ok": True}
@@ -592,11 +680,17 @@ async def list_runs(
     limit: int = 25,
     ids: str | None = None,
     x_admin_token: str | None = Header(default=None),
+    user: User | None = Depends(optional_user),  # noqa: B008
 ) -> dict:
     """Run ids are unguessable UUIDs and the browser remembers its own, so
-    `?ids=a,b` returns just those. Listing every visitor's runs is admin-only."""
+    `?ids=a,b` returns just those. With no ids, a signed-in user gets their own
+    runs; listing every visitor's runs is admin-only."""
     limit = max(1, min(limit, 100))
     if ids is None:
+        if user is not None and not x_admin_token:
+            async with EventStore() as store:
+                rows = await store.list_runs(limit, user_id=user.id)
+                return {"runs": [r.model_dump() for r in rows]}
         _require_admin(x_admin_token)
         async with EventStore() as store:
             rows = await store.list_runs(limit)
@@ -609,7 +703,8 @@ async def list_runs(
     except ValueError as e:
         raise HTTPException(400, "ids must be UUIDs") from e
     async with EventStore() as store:
-        rows = [r for r in [await store.get_run(i) for i in wanted] if r is not None]
+        rows = [r for r in [await store.get_run(i) for i in wanted]
+                if r is not None and _can_see(r, user)]
         out = []
         for r in rows:
             note = await _stale_note(store, r)
@@ -649,10 +744,12 @@ def _as_stale_failed(row, note: str) -> dict:
 
 
 @router.get("/runs/{run_id}")
-async def get_run(run_id: str) -> dict:
+async def get_run(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     async with EventStore() as store:
         row = await store.get_run(run_id)
-        if row is None:
+        if row is None or not _can_see(row, user):
             raise HTTPException(status_code=404, detail="unknown run")
         cost = await store.aggregate_cost(run_id)
         lat = await store.aggregate_latency(run_id)
@@ -665,13 +762,18 @@ async def get_run(run_id: str) -> dict:
 
 
 @router.get("/runs/{run_id}/events")
-async def events(run_id: str) -> dict:
+async def events(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     async with EventStore() as store:
+        await _guard_run(store, run_id, user)
         return {"events": [e.model_dump() for e in await store.read(run_id)]}
 
 
 @router.get("/runs/{run_id}/output")
-async def output(run_id: str) -> dict:
+async def output(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     """The run's actual deliverable - what the orchestrator tab shows
     alongside the graph once a run finishes, answering the goal itself
     rather than only describing how it was produced.
@@ -685,7 +787,7 @@ async def output(run_id: str) -> dict:
     """
     async with EventStore() as store:
         row = await store.get_run(run_id)
-        if row is None:
+        if row is None or not _can_see(row, user):
             raise HTTPException(status_code=404, detail="unknown run")
         graph = GraphSpec(**migrate(row.graph_spec)).finalize() if row.graph_spec else None
         sinks = set(graph.sink_node_ids()) if graph else set()
@@ -703,20 +805,28 @@ async def output(run_id: str) -> dict:
 
 
 @router.get("/runs/{run_id}/trace")
-async def trace(run_id: str) -> dict:
+async def trace(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     """Per-agent execution trace: input, output, tools, duration, status."""
     async with EventStore() as store:
         row = await store.get_run(run_id)
-        if row is None:
+        if row is None or not _can_see(row, user):
             raise HTTPException(status_code=404, detail="unknown run")
         return {"run_id": run_id, "status": row.status,
                 **build_trace(await store.read(run_id), row.graph_spec)}
 
 
 @router.get("/runs/{run_id}/stream")
-async def stream(run_id: str, request: Request) -> EventSourceResponse:
+async def stream(
+    run_id: str, request: Request,
+    user: User | None = Depends(optional_user),  # noqa: B008
+) -> EventSourceResponse:
     """SSE tail of the event log. No polling from the browser - the browser
     holds one connection and the server does the polling, once."""
+    if settings.auth_required:
+        async with EventStore() as store:
+            await _owned_run(store, run_id, user)
 
     async def gen():
         last = 0
@@ -747,11 +857,14 @@ async def stream(run_id: str, request: Request) -> EventSourceResponse:
 
 
 @router.get("/runs/{run_id}/metrics")
-async def metrics(run_id: str) -> dict:
+async def metrics(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     from backend.metrics import compute
 
     async with EventStore() as store:
-        if await store.get_run(run_id) is None:
+        row = await store.get_run(run_id)
+        if row is None or not _can_see(row, user):
             raise HTTPException(status_code=404, detail="unknown run")
         return (await compute(store, run_id)).model_dump()
 
@@ -770,10 +883,13 @@ async def workflow_dna_history(limit: int = 20) -> dict:
 
 
 @router.post("/runs/{run_id}/replay")
-async def replay(run_id: str) -> dict:
+async def replay(
+    run_id: str, user: User | None = Depends(optional_user),  # noqa: B008
+) -> dict:
     from backend.replay import replay_run
 
     async with EventStore() as store:
+        await _guard_run(store, run_id, user)
         try:
             result, diff = await replay_run(store, run_id)
         except ValueError as e:
