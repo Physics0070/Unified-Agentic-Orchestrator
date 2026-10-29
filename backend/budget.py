@@ -164,14 +164,19 @@ def flush() -> None:
         _flush_locked()
 
 
-def record(tokens: int, cost_usd: float = 0.0) -> None:
-    """Add one model call's usage to today's total."""
+def record(tokens: int, cost_usd: float = 0.0, *, defer_flush: bool = False) -> None:
+    """Add one model call's usage to today's total.
+
+    `defer_flush` skips the periodic DB write: it is a blocking HTTP round trip
+    and would stall the event loop in the middle of a token stream. The caller
+    then owns calling `flush()` (off the loop) once the stream is over.
+    """
     global _pend_tokens, _pend_cost
     with _lock:
         _roll()
         _pend_tokens += max(0, int(tokens))
         _pend_cost += max(0.0, float(cost_usd))
-        if time.monotonic() - _last_flush >= FLUSH_SECONDS:
+        if not defer_flush and time.monotonic() - _last_flush >= FLUSH_SECONDS:
             _flush_locked()
 
 
@@ -197,9 +202,50 @@ def usage() -> dict:
     }
 
 
-def ensure_available() -> None:
-    """Raise DailyCapReached if the cap is on and already spent. 0 = unlimited."""
-    if usage()["cap_reached"]:
+def _background_refresh() -> None:
+    """Re-read the shared total without holding `_lock` during the network I/O,
+    so a streaming turn calling `record()` never waits behind it."""
+    global _base_tokens, _base_cost
+    with _lock:
+        day = _day
+    try:
+        row = _db(lambda c: c.execute(
+            "SELECT tokens, cost_usd FROM usage_daily WHERE day = ?",
+            [day.isoformat()]).fetchone())
+    except Exception as e:
+        _warn(e)
+        return
+    with _lock:
+        if _day == day:
+            _base_tokens, _base_cost = (int(row[0]), float(row[1])) if row else (0, 0.0)
+
+
+def ensure_available(*, blocking: bool = True) -> None:
+    """Raise DailyCapReached if the cap is on and already spent. 0 = unlimited.
+
+    `blocking=False` is for the chat hot path: it checks the in-memory total and,
+    when that is older than REFRESH_SECONDS, claims the refresh and runs it on a
+    background thread instead of making this request wait on 1-3 database round
+    trips. The request that triggers it is judged on the slightly stale total
+    (on a cold instance: this process's own usage); the next one sees the fresh
+    value. The cap is a spend guard, not a billing ledger, so one request of lag
+    is the right price for not putting Turso latency in front of the first token.
+    """
+    if blocking:
+        if usage()["cap_reached"]:
+            raise DailyCapReached
+        return
+    global _last_refresh
+    with _lock:
+        _roll()
+        stale = not _last_refresh or time.monotonic() - _last_refresh >= REFRESH_SECONDS
+        if stale:
+            _last_refresh = time.monotonic()  # claim it: concurrent requests skip
+        cap = settings.daily_token_cap
+        tokens = _base_tokens + _pend_tokens
+    if stale:
+        threading.Thread(target=_background_refresh, name="budget-refresh", daemon=True).start()
+    if cap > 0 and tokens >= cap:
         raise DailyCapReached
 
 

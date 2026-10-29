@@ -26,6 +26,7 @@ import logging
 import math
 import re
 import threading
+import time
 import uuid
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
@@ -348,6 +349,12 @@ _WORKSPACE_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 MAX_WORKSPACES = 200
 
 
+# How long "this workspace has no documents" is trusted before storage is asked
+# again. Uploads on this instance bypass it (create=True); another instance's
+# upload shows up within this window.
+EMPTY_TTL_S = 30.0
+
+
 class KnowledgeBase:
     """Workspaces by id, least-recently-used evicted past MAX_WORKSPACES so an
     open endpoint cannot be used to grow memory without bound."""
@@ -356,6 +363,10 @@ class KnowledgeBase:
         # "auto": use the EventStore's database per current settings; None: memory only.
         self._store_arg = store
         self._spaces: OrderedDict[str, Workspace] = OrderedDict()
+        # workspace_id -> monotonic time we last found it empty in storage. A
+        # chat turn with knowledge on asks for a workspace that has no documents
+        # on every request; without this each ask re-reads the database.
+        self._empty: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def _resolve_store(self) -> KnowledgeStore | None:
@@ -372,6 +383,10 @@ class KnowledgeBase:
             raise KnowledgeError("workspace_id must be 8-64 letters, digits, '-' or '_'")
         with self._lock:
             ws = self._spaces.get(workspace_id)
+            if ws is None and not create:
+                seen = self._empty.get(workspace_id)
+                if seen is not None and time.monotonic() - seen < EMPTY_TTL_S:
+                    return None
             if ws is None:
                 # Cold start (or evicted): rebuild from durable storage.
                 cand = Workspace(workspace_id, self._resolve_store())
@@ -379,6 +394,11 @@ class KnowledgeBase:
                 if create or cand.docs:
                     ws = cand
                     self._spaces[workspace_id] = ws
+                    self._empty.pop(workspace_id, None)
+                else:
+                    self._empty[workspace_id] = time.monotonic()
+                    if len(self._empty) > 1024:
+                        self._empty.pop(next(iter(self._empty)))
                     while len(self._spaces) > MAX_WORKSPACES:
                         self._spaces.popitem(last=False)
             if ws is not None:

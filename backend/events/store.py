@@ -268,7 +268,10 @@ class EventStore:
                 self._url, auth_token=self._token, isolation_level=None
             )
             _install_keepalive(c._session, settings.db_op_timeout_s or None)
-            c.execute("PRAGMA foreign_keys = ON")
+            # No `PRAGMA foreign_keys = ON` here: every operation runs on a
+            # throwaway Hrana stream (baton reset in `_run`, `_run_batch`), so a
+            # per-connection pragma never applied to them - it only cost one
+            # round trip on every open, before the first query.
             return c
 
         self._conn_obj = await asyncio.to_thread(_open_sqlite if self._sqlite else _open)
@@ -353,6 +356,84 @@ class EventStore:
             graph_spec=graph_spec, status=status, replay_of=replay_of,
             last_seq=0, started_at=started_at, ended_at=None,
         )
+
+    async def record_run(
+        self,
+        run_id: str,
+        goal: str,
+        config_hash: str,
+        seed: int,
+        graph_spec: dict,
+        events: list[dict],
+        *,
+        status: str,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+    ) -> list[int]:
+        """Create a run AND its whole event log in ONE round trip.
+
+        For a turn whose events were buffered in memory and are persisted once
+        it is over (chat). The result is identical to `create_run` followed by
+        `append_many(events)` plus a status update: seqs 1..n in list order,
+        `last_seq` = n, the final `status`/`ended_at`. Event dicts take the same
+        keys as `append_many`, plus an optional `ts`. Atomic: all or nothing.
+        """
+        started_at = started_at or _now()
+        n = len(events)
+        rows = [
+            _event_row(
+                ev["event_type"], ev.get("node_id"), ev.get("agent_id"), ev.get("payload"),
+                ev.get("tokens_in", 0), ev.get("tokens_out", 0), ev.get("cost_usd", 0.0),
+                ev.get("latency_ms"), ev.get("ts") or started_at,
+            )
+            for ev in events
+        ]
+        run_args = [run_id, goal, config_hash, seed, json.dumps(graph_spec), status,
+                    None, n, started_at, ended_at]
+        run_sql = (
+            "INSERT INTO runs (run_id, goal, config_hash, seed, graph_spec, status, "
+            "replay_of, last_seq, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+
+        def _do(c):
+            if self._sqlite:
+                try:
+                    c.execute(run_sql, run_args)
+                    c.executemany(_INSERT_EVENT, [(run_id, i + 1, *r) for i, r in enumerate(rows)])
+                    c.commit()
+                except sqlite3.Error:
+                    c.rollback()
+                    raise
+                return list(range(1, n + 1))
+            steps = [build_batch_step("BEGIN", want_rows=False)]
+
+            def add(sql: str, args: list) -> None:
+                steps.append(build_batch_step(
+                    sql, args=args, want_rows=False,
+                    condition={"type": "ok", "step": len(steps) - 1},
+                ))
+
+            add(run_sql, run_args)
+            for i, r in enumerate(rows):
+                add(_INSERT_EVENT, [run_id, i + 1, *r])
+            steps.append(build_batch_step(
+                "COMMIT", want_rows=False, condition={"type": "ok", "step": len(steps) - 1}
+            ))
+            steps.append(build_batch_step(
+                "ROLLBACK", want_rows=False,
+                condition={"type": "not", "cond": {"type": "is_autocommit"}},
+            ))
+            results, errors = _run_batch(c._session, steps)
+            for err in errors:
+                if err:
+                    msg = err.get("message", "unknown error") if isinstance(err, dict) else str(err)
+                    raise EventStoreError(f"event store rejected the operation: {msg}")
+            for k in range(1 + n):
+                if (results[1 + k] or {}).get("affected_row_count") != 1:
+                    raise EventStoreError("event store did not insert the run")
+            return list(range(1, n + 1))
+
+        return await self._run(_do)
 
     async def get_run(self, run_id: str) -> RunRow | None:
         def _do(c):

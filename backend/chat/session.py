@@ -14,8 +14,10 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 
+from backend import budget
 from backend.chat.answer import (
     CONTRIBUTION_SCHEMA,
     contribute,
@@ -39,6 +41,54 @@ log = logging.getLogger("aco.chat")
 # one slow local model stalls the answer for five minutes and the user watches
 # an empty screen - which is indistinguishable from the app being broken.
 SPECIALIST_TIMEOUT_S = 45.0
+
+# Upper bound on the single end-of-turn event-log write. It happens after the
+# answer and `done` have been sent, but the stream is still open while it runs,
+# so a hung database must not hold the connection (it was seen open for 126s).
+FLUSH_TIMEOUT_S = 8.0
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+async def _flush_turn(
+    store: EventStore | None,
+    open_store: Callable[[], EventStore] | None,
+    run: dict,
+    events: list[dict],
+) -> int:
+    """Persist the whole buffered turn in ONE database round trip, then settle
+    the daily-usage counter off the event loop. Never raises: a failure here is
+    logged and the already-delivered answer stands. Returns the number of
+    event-log round trips issued (0 or 1)."""
+
+    async def _write() -> int:
+        if store is not None:
+            await store.record_run(**run, events=events)
+            return 1
+        if open_store is not None:
+            async with open_store() as s:
+                await s.record_run(**run, events=events)
+            return 1
+        return 0
+
+    async def _usage() -> None:
+        await asyncio.to_thread(budget.flush)
+
+    calls = 0
+    done = await asyncio.gather(
+        asyncio.wait_for(_write(), FLUSH_TIMEOUT_S),
+        asyncio.wait_for(_usage(), FLUSH_TIMEOUT_S),
+        return_exceptions=True,
+    )
+    if isinstance(done[0], BaseException):
+        log.warning("could not record chat run %s in the event log: %r", run["run_id"], done[0])
+    else:
+        calls = done[0]
+    if isinstance(done[1], BaseException):
+        log.warning("could not flush usage counter: %r", done[1])
+    return calls
 
 
 def specialist_models(models: list[str]) -> list[str]:
@@ -177,6 +227,48 @@ def _mig(contributions: list[dict]) -> dict:
     return {"available": True, "per_agent": per_agent, "overlapping_pairs": pairs}
 
 
+def _specialist_rows(contributions: list[dict], ts: str) -> list[dict]:
+    """Every specialist's event-log rows, in the order they are stored."""
+    batch: list[dict] = []
+    for c in contributions:
+        if c.get("error"):
+            batch.append({
+                "event_type": EventType.BRANCH_FAILED, "ts": ts,
+                "node_id": c["aspect"], "agent_id": c["aspect"],
+                "payload": {k: v for k, v in c.items() if k != "text"},
+            })
+            continue
+        # TOOL_RESULT is what replay serves from, keyed by (node_id, agent_id).
+        # Without this row a chat turn records that it happened but cannot be
+        # replayed, which would make the drawer's replay claim false for
+        # exactly the turns most people will look at.
+        batch.append({
+            "event_type": EventType.TOOL_RESULT, "ts": ts,
+            "node_id": c["aspect"], "agent_id": c["aspect"],
+            "tokens_in": c.get("tokens_in", 0), "tokens_out": c.get("tokens_out", 0),
+            "cost_usd": c.get("cost_usd", 0.0), "latency_ms": c.get("latency_ms"),
+            "payload": {"model": c.get("model", ""),
+                        "used_fallback": c.get("used_fallback", False),
+                        "replayed": False, "text": c.get("text", ""),
+                        "input": c.get("input")},
+        })
+        # The validated handoff is what a replay diff compares. Without it the
+        # original run has no recorded outputs and every node reads as a
+        # difference.
+        batch.append({
+            "event_type": EventType.HANDOFF_VALIDATED, "ts": ts,
+            "node_id": c["aspect"], "agent_id": c["aspect"],
+            "payload": {"attempt": 1 if c.get("repaired") else 0,
+                        "payload": {"points": c.get("points") or []}},
+        })
+        batch.append({
+            "event_type": EventType.NODE_END, "ts": ts,
+            "node_id": c["aspect"], "agent_id": c["aspect"],
+            "payload": {k: v for k, v in c.items() if k != "text"},
+        })
+    return batch
+
+
 async def run_turn(
     question: str,
     *,
@@ -189,15 +281,36 @@ async def run_turn(
     priority: str = "balanced",
     workspace_id: str | None = None,
     use_knowledge: bool = True,
+    open_store: Callable[[], EventStore] | None = None,
 ) -> AsyncIterator[dict]:
     """Yield `{"event": ..., "data": ...}` for the whole turn.
 
-    `store` is optional: the chat works without a database, it just loses the
-    replayable trace. A Supabase outage should not take the product down.
+    The event log is optional: the chat works without a database, it just loses
+    the replayable trace. Pass an open `store`, or `open_store` (a factory for an
+    async-context-manager store, opened only at flush time so connecting costs
+    nothing before the first token).
+
+    Nothing touches the database on the way to the first token or while the
+    answer streams. Every event-log row is buffered in memory in the exact order
+    it used to be written, and the whole turn (run row + all events + final
+    status) goes out as ONE batched write after the last token and the `done`
+    event have been yielded. That write is bounded by FLUSH_TIMEOUT_S and its
+    failure is logged, never raised, so it cannot break or delay the answer
+    already sent - only how long the stream stays open afterwards (one round
+    trip, versus the 6-8 sequential ones it replaces). It stays inside the
+    stream rather than going to a background task because a serverless host may
+    freeze the instance once the response ends, silently dropping the write.
     """
     run_id = str(uuid.uuid4())
     t0 = time.perf_counter()
+    started_at = _now()
     first_token_ms: int | None = None
+    kb_lookup = False
+    # (event dict, ...) in the order they used to be appended to the store.
+    log_events: list[dict] = []
+    # Number of event-log round trips that happened before the first token. By
+    # construction 0; kept as a counter so the timing log would show a regression.
+    db_calls_before_first_token = 0
 
     yield {"event": "start", "data": {"run_id": run_id}}
 
@@ -268,25 +381,17 @@ async def run_turn(
                   "edges": [e.model_dump() for e in graph.edges]},
     }}
 
-    if store:
-        try:
-            await store.create_run(run_id, question[:2000], graph.config_hash, seed,
-                                   graph.model_dump(), "running")
-            # RUN_START and GRAPH_PROPOSED have nothing but wall-clock between
-            # them - one round trip instead of two.
-            await store.append_many(run_id, [
-                {"event_type": EventType.RUN_START,
-                 "payload": {"mode": "chat", "question": question[:2000]}},
-                {"event_type": EventType.GRAPH_PROPOSED, "payload": {
-                    "intent": plan.intent, "complexity": plan.complexity,
-                    "rationale": plan.rationale, "source": plan.source,
-                    "config_hash": graph.config_hash,
-                    "branches": [s.id for s in plan.specialists],
-                }},
-            ])
-        except Exception as e:
-            log.warning("event log unavailable, continuing without it: %s", e)
-            store = None
+    log_events.append({
+        "event_type": EventType.RUN_START, "ts": _now(),
+        "payload": {"mode": "chat", "question": question[:2000]}})
+    log_events.append({
+        "event_type": EventType.GRAPH_PROPOSED, "ts": _now(),
+        "payload": {
+            "intent": plan.intent, "complexity": plan.complexity,
+            "rationale": plan.rationale, "source": plan.source,
+            "config_hash": graph.config_hash,
+            "branches": [s.id for s in plan.specialists],
+        }})
 
     # ---------- knowledge ----------
     # Retrieval is folded into the question text, exactly like web search below:
@@ -295,7 +400,9 @@ async def run_turn(
     spec_question = question
     if use_knowledge and workspace_id:
         try:
-            ws = knowledge_base.get(workspace_id, create=False)
+            kb_lookup = True
+            # Off the loop: a cold workspace is rebuilt from the database.
+            ws = await asyncio.to_thread(knowledge_base.get, workspace_id, create=False)
             if ws is not None and ws.docs:
                 yield {"event": "status", "data": {"stage": "retrieving"}}
                 found = await asyncio.to_thread(ws.search, question, top_k=4)
@@ -313,14 +420,11 @@ async def run_turn(
     if plan.needs_council:
         yield {"event": "status", "data": {"stage": "consulting",
                                            "count": len(plan.specialists)}}
-        if store:
-            # One round trip for every specialist's NODE_START instead of one
-            # per specialist - this sat between "consulting" and the actual
-            # model calls starting below.
-            await store.append_many(run_id, [
-                {"event_type": EventType.NODE_START, "node_id": s.id, "payload": {"role": s.role}}
-                for s in plan.specialists
-            ])
+        log_events.extend(
+            {"event_type": EventType.NODE_START, "node_id": s.id, "ts": _now(),
+             "payload": {"role": s.role}}
+            for s in plan.specialists
+        )
 
         fan_t0 = time.perf_counter()
         # One gather: every specialist starts before any of them finishes, and
@@ -339,51 +443,7 @@ async def run_turn(
         ])
         fanout_ms = int((time.perf_counter() - fan_t0) * 1000)
 
-        if store:
-            # All of every specialist's rows in one round trip, before any of
-            # the per-specialist SSE events below - the loop that yields them
-            # then has zero awaits between yields, so all N frames land
-            # back-to-back instead of gated behind up to 3N sequential writes.
-            batch: list[dict] = []
-            for c in contributions:
-                if c.get("error"):
-                    batch.append({
-                        "event_type": EventType.BRANCH_FAILED,
-                        "node_id": c["aspect"], "agent_id": c["aspect"],
-                        "payload": {k: v for k, v in c.items() if k != "text"},
-                    })
-                    continue
-                # TOOL_RESULT is what replay serves from, keyed by
-                # (node_id, agent_id). Without this row a chat turn records
-                # that it happened but cannot be replayed, which would make
-                # the drawer's replay claim false for exactly the turns most
-                # people will look at.
-                batch.append({
-                    "event_type": EventType.TOOL_RESULT,
-                    "node_id": c["aspect"], "agent_id": c["aspect"],
-                    "tokens_in": c.get("tokens_in", 0), "tokens_out": c.get("tokens_out", 0),
-                    "cost_usd": c.get("cost_usd", 0.0), "latency_ms": c.get("latency_ms"),
-                    "payload": {"model": c.get("model", ""),
-                                "used_fallback": c.get("used_fallback", False),
-                                "replayed": False, "text": c.get("text", ""),
-                                "input": c.get("input")},
-                })
-                # The validated handoff is what a replay diff compares.
-                # Without it the original run has no recorded outputs and
-                # every node reads as a difference.
-                batch.append({
-                    "event_type": EventType.HANDOFF_VALIDATED,
-                    "node_id": c["aspect"], "agent_id": c["aspect"],
-                    "payload": {"attempt": 1 if c.get("repaired") else 0,
-                                "payload": {"points": c.get("points") or []}},
-                })
-                batch.append({
-                    "event_type": EventType.NODE_END,
-                    "node_id": c["aspect"], "agent_id": c["aspect"],
-                    "payload": {k: v for k, v in c.items() if k != "text"},
-                })
-            if batch:
-                await store.append_many(run_id, batch)
+        log_events.extend(_specialist_rows(contributions, _now()))
 
         for i, c in enumerate(contributions):
             yield {"event": "specialist", "data": {
@@ -502,31 +562,41 @@ async def run_turn(
                         answer, answer_error),
     }
 
-    # Neither `bench` nor the final answer depends on the store writes below -
-    # yield both immediately, then persist. This is the segment that measured
-    # at 17.7s in production (TOOL_RESULT + RUN_END + set_run_status, 3
-    # sequential Turso round trips for data the client never needed to wait
-    # on to see its answer). The writes still run to completion before this
-    # generator's caller closes the store - see backend/api/routes.py's `gen`.
+    # Neither `bench` nor the final answer depends on the event-log write, so
+    # both are yielded first. The log rows are buffered, in the order they used
+    # to be written (answer TOOL_RESULT, then RUN_END carrying the benchmarks).
+    if answer and not answer_error:
+        # The answer is a completion too. Recording it under a stable node id
+        # means a replayed turn reproduces the reply itself, not just the
+        # specialist notes that fed it.
+        log_events.append({
+            "event_type": EventType.TOOL_RESULT, "node_id": "answer", "agent_id": "answer",
+            "latency_ms": total_ms, "ts": _now(),
+            "payload": {"model": answer_model, "used_fallback": False,
+                        "replayed": False, "text": answer}})
+    ended_at = _now()
+    log_events.append({"event_type": EventType.RUN_END, "ts": ended_at,
+                       "payload": {"benchmarks": bench}})
     yield {"event": "benchmarks", "data": bench}
     yield {"event": "done", "data": {"run_id": run_id, "answer": answer,
                                      **({"error": answer_error} if answer_error else {})}}
 
-    if store:
-        try:
-            if answer and not answer_error:
-                # The answer is a completion too. Recording it under a stable
-                # node id means a replayed turn reproduces the reply itself,
-                # not just the specialist notes that fed it.
-                await store.append(
-                    run_id, EventType.TOOL_RESULT, node_id="answer", agent_id="answer",
-                    latency_ms=total_ms,
-                    payload={"model": answer_model, "used_fallback": False,
-                             "replayed": False, "text": answer},
-                )
-            await store.append_and_set_status(
-                run_id, EventType.RUN_END, {"benchmarks": bench},
-                status="failed" if answer_error else "done", ended=True,
-            )
-        except Exception as e:
-            log.warning("could not close run in log: %s", e)
+    db_calls = 0
+    if store is not None or open_store is not None:
+        db_calls = await _flush_turn(
+            store, open_store,
+            {"run_id": run_id, "goal": question[:2000], "config_hash": graph.config_hash,
+             "seed": seed, "graph_spec": graph.model_dump(),
+             "status": "failed" if answer_error else "done",
+             "started_at": started_at, "ended_at": ended_at},
+            log_events,
+        )
+    else:
+        await asyncio.to_thread(budget.flush)
+    log.info(
+        "chat turn %s route=%s db_calls_before_first_token=%d kb_lookup=%s "
+        "db_calls_after_done=%d plan_ms=%d first_token_ms=%s total_ms=%d flush_ms=%d",
+        run_id, bench["route"], db_calls_before_first_token, kb_lookup, db_calls,
+        plan_ms, first_token_ms, total_ms,
+        int((time.perf_counter() - t0) * 1000) - total_ms,
+    )

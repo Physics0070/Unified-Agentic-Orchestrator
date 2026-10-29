@@ -261,21 +261,27 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
     """
     from backend.chat import run_turn
 
-    budget.ensure_available()
+    # Non-blocking: a stale daily-usage total is refreshed on a background
+    # thread instead of making this request wait on Turso before the stream opens.
+    budget.ensure_available(blocking=False)
     models_ = _require_models(req.models or await _default_models())
     history = [m.model_dump() for m in req.history]
 
     async def gen():
-        store: EventStore | None = None
+        # The event log is opened lazily by run_turn, only for its single
+        # end-of-turn write - nothing connects to the database before the first
+        # token. If the store cannot even be constructed (no Turso credentials)
+        # the chat just runs without a trace.
+        open_store = None
         try:
-            store = EventStore()
-            await store.__aenter__()
+            EventStore()  # validates configuration only; connects in __aenter__
+            open_store = EventStore
         except Exception as e:
             log.warning("chat running without the event log: %s", e)
-            store = None
         try:
             async for evt in run_turn(
-                req.message, history=history, models=models_, seed=req.seed, store=store,
+                req.message, history=history, models=models_, seed=req.seed,
+                open_store=open_store,
                 force_web_search=req.force_web_search, forced_model=req.forced_model,
                 priority=req.priority, workspace_id=req.workspace_id,
                 use_knowledge=req.use_knowledge,
@@ -288,9 +294,6 @@ async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
         except Exception as e:
             log.exception("chat turn failed")
             yield {"event": "error", "data": json.dumps({"detail": str(e)[:300]})}
-        finally:
-            if store is not None:
-                await store.__aexit__(None, None, None)
 
     # ping + anti-buffering header, matching /runs/{run_id}/stream - Render's
     # edge is nginx-family and buffers a response by default, which would hold
