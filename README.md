@@ -208,6 +208,10 @@ Test data comes from real public sets:
 No sample result in this repository is made up. Where data is missing, the code
 raises an error instead of inventing something.
 
+**Render (always on).** One service serves the website and the API, with no
+5-minute limit, so pause / resume / cancel and live streaming all work. Step by
+step in [docs/render.md](docs/render.md).
+
 ## More documentation
 
 - [docs/architecture.md](docs/architecture.md): events, node types, data model

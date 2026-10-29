@@ -6,6 +6,7 @@ are NOT declared here. They are read exclusively by
 returns exactly one module.
 """
 
+import os
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -46,7 +47,11 @@ class Settings(BaseSettings):
     # RUN_END {"ok": false, "reason": "run_timeout"} and marked failed, so a run
     # can never sit in "running" forever (a serverless function is killed at its
     # maxDuration, 300s on Vercel, leaving nothing to mark it failed). 0 = off.
-    run_timeout_s: int = Field(default=270, ge=0)
+    # Default follows the platform: 270s on Vercel (killed at 300s), 30 min on
+    # an always-on host, where runs have no function limit.
+    run_timeout_s: int = Field(
+        default_factory=lambda: 270 if os.environ.get("VERCEL") else 1800, ge=0
+    )
     # One event-store round trip. The Turso driver is synchronous HTTP with no
     # timeout of its own; a hung request used to hold the store lock forever.
     # 0 = off.
@@ -148,21 +153,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_secrets_in_prod(self) -> "Settings":
+        """Only SECRET_KEY is truly required in prod.
+
+        Turso is optional (EventStore falls back to a local sqlite file and
+        logs a warning that it is lost on an ephemeral disk). Provider keys
+        are read by secret_broker and may also be pasted at runtime, so they are
+        not checked here. FRONTEND_ORIGIN is only needed when the frontend is
+        hosted on a different origin than the API.
+        """
         if self.is_prod:
-            missing = [
-                name
-                for name in (
-                    "secret_key", "turso_database_url", "turso_auth_token",
-                    "llm_provider", "ollama_base_url", "frontend_origin",
-                )
-                if not getattr(self, name)
-            ]
-            # OLLAMA_API_KEY is deliberately not required here: an
-            # unauthenticated local/tunnelled Ollama instance is a valid prod
-            # configuration too, not just a dev convenience.
-            if missing:
-                names = ", ".join(n.upper() for n in missing)
-                raise ValueError(f"missing required prod settings: {names}")
+            if not self.secret_key:
+                raise ValueError("missing required prod settings: SECRET_KEY")
         return self
 
 
