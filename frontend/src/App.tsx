@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  api, streamEvents,
+  api, AUTH_REQUIRED_EVENT, streamEvents, type AuthState,
   type CouncilSummary, type DnaPredictedPayload, type GraphSpec, type LogEvent,
   type MarginalValueReport, type ReplayDiff, type RunMetrics, type RunOutput, type TraceStep,
 } from './api'
+import { AuthDialog } from './AuthDialog'
 import { ChatPanel } from './ChatPanel'
 import { ClarifyPanel, type Clarification } from './ClarifyPanel'
 import { deriveStatuses, GraphCanvas, StatusLegend } from './GraphCanvas'
@@ -77,11 +78,21 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const [runGoal, setRunGoal] = useState('')
   const [backend, setBackend] = useState<{ ok: boolean | null; ms: number | null }>({ ok: null, ms: null })
+  const [auth, setAuth] = useState<AuthState>({ user: null, auth_required: false })
+  const [authOpen, setAuthOpen] = useState(false)
   const recorded = useRef<string | null>(null)
   const toast = useCallback((text: string, tone?: Toast['tone']) => {
     const id = Date.now() + Math.random()
     setToasts((t) => [...t, { id, text, tone }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200)
+  }, [])
+  // Who is signed in (if anyone) and whether this deployment requires it. A 401
+  // "sign in required" from any call opens the dialog (see api.ts).
+  useEffect(() => {
+    api.authMe().then(setAuth).catch(() => { /* older backend: anonymous use as before */ })
+    const need = () => { setAuth((a) => ({ ...a, auth_required: true })); setAuthOpen(true) }
+    window.addEventListener(AUTH_REQUIRED_EVENT, need)
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, need)
   }, [])
   const stopRef = useRef<(() => void) | null>(null)
   const goalRef = useRef<HTMLInputElement>(null)
@@ -299,6 +310,7 @@ export default function App() {
     { id: 'new', group: 'Action', label: 'New run', keywords: 'start reset', run: newRun },
     { id: 'prompt', group: 'Action', label: 'Focus the goal prompt', hint: '/', run: () => { setView('orchestrator'); setTimeout(() => goalRef.current?.focus(), 0) } },
     { id: 'run', group: 'Action', label: 'Run the current plan', hint: '⌘↵', keywords: 'execute start', run: () => { setView('orchestrator'); runRef.current?.() } },
+    { id: 'account', group: 'Action', label: auth.user ? 'Account' : 'Sign in', keywords: 'login register sign out', run: () => setAuthOpen(true) },
     { id: 'sidebar', group: 'Action', label: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: toggleSidebar },
     { id: 'particles', group: 'Action', label: settings.particles ? 'Turn particles off' : 'Turn particles on', keywords: 'background animation', run: () => patch({ particles: !settings.particles }) },
     { id: 'landing', group: 'Go to', label: 'Back to the overview', run: () => { window.location.hash = '' } },
@@ -323,6 +335,7 @@ export default function App() {
         runs={runs} onOpenRun={openRun}
         counts={{ artifacts: runs.filter((r) => r.output?.outputs.length).length, runs: runs.length }}
         repo={repo} backend={backend}
+        user={auth.user} onAccount={() => setAuthOpen(true)}
       />
       <div className="flex-1 min-w-0 flex flex-col">
       {/* ---------------------------------------------------------- header */}
@@ -581,6 +594,15 @@ export default function App() {
         />
       )}
       </div>
+      <AuthDialog
+        open={authOpen} onClose={() => setAuthOpen(false)}
+        user={auth.user} authRequired={auth.auth_required}
+        onAuthed={(user) => {
+          setAuth((a) => ({ ...a, user })); setAuthOpen(false); setError(null)
+          toast(`Signed in as ${user.email}`); ping()
+        }}
+        onSignedOut={() => { setAuth((a) => ({ ...a, user: null })); setAuthOpen(false); toast('Signed out') }}
+      />
       <CommandPalette open={palette} onClose={() => setPalette(false)} commands={commands} />
       <Toasts items={toasts} />
     </div>

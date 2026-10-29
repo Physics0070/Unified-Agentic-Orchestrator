@@ -79,6 +79,9 @@ class RunRow(BaseModel):
     last_seq: int = 0
     started_at: str | None = None
     ended_at: str | None = None
+    # Owner, when the run was created by a signed-in user. Never serialised:
+    # run payloads reach anonymous capability-link readers too.
+    user_id: str | None = Field(default=None, exclude=True)
 
 
 class CostTotals(BaseModel):

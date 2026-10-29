@@ -157,8 +157,24 @@ export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
 
 const url = (path: string) => `${API_BASE}${path}`
 
+// ------------------------------------------------------------------ accounts
+
+export interface AuthUser { id: string; email: string }
+export interface AuthState { user: AuthUser | null; auth_required: boolean }
+
+/** Fired when the backend answers 401 "sign in required" (AUTH_REQUIRED is on and
+ * there is no session). App listens and opens the sign-in dialog. */
+export const AUTH_REQUIRED_EVENT = 'aco:auth-required'
+
+function flagAuthRequired(status: number, detail: string) {
+  if (status === 401 && detail.includes('sign in required')) {
+    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT))
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url(path), {
+    credentials: 'same-origin',
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
@@ -172,6 +188,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* body was not JSON; the raw slice is the best we have */
     }
+    flagAuthRequired(r.status, String(detail))
     throw new Error(`${r.status} · ${detail}`)
   }
   return r.json() as Promise<T>
@@ -274,16 +291,26 @@ async function upload(file: File): Promise<KnowledgeSummary & { document: Knowle
   const fd = new FormData()
   fd.append('workspace_id', getWorkspaceId())
   fd.append('file', file)
-  const r = await fetch(url('/api/knowledge/upload'), { method: 'POST', body: fd })
+  const r = await fetch(url('/api/knowledge/upload'), {
+    method: 'POST', body: fd, credentials: 'same-origin',
+  })
   if (!r.ok) {
     let detail = `${r.status}`
     try { detail = (await r.json()).detail ?? detail } catch { /* non-JSON error body */ }
+    flagAuthRequired(r.status, String(detail))
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
   }
   return r.json()
 }
 
 export const api = {
+  authMe: () => req<AuthState>('/api/auth/me'),
+  register: (email: string, password: string) =>
+    req<{ user: AuthUser }>('/api/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  login: (email: string, password: string) =>
+    req<{ user: AuthUser }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  logout: () => req<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+
   models: () => req<{ models: string[]; providers: string[] }>('/api/models'),
 
   modelCatalog: () =>
@@ -486,6 +513,7 @@ export function streamChat(
     try {
       const r = await fetch(url('/api/chat'), {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...rest, forced_model: forcedModel, force_web_search: !!forceWebSearch,
