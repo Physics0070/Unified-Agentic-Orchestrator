@@ -136,7 +136,7 @@ export function Landing({ onEnter }: { onEnter: () => void }) {
 
         <div className="d-stage" ref={stageRef}>
           <section className="d-step d-step--left d-step--hero" data-step>
-            <p className="d-label">Multi-agent orchestration · AE-03</p>
+            <p className="d-label">Multi-agent orchestration</p>
             <h1 className="d-display">Ask anything. Then see what it cost.</h1>
             <p className="d-body">
               Simple questions go straight to one model and stream back in about two seconds.
