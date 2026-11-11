@@ -2,7 +2,9 @@
 
 # 🧭 Agent Council Orchestrator
 
-**A governed runtime for AI agent teams: typed hand-offs, blocked tools, and a flight recorder that replays any run for $0. It splits big jobs between specialist agents, checks their work, and shows what its runs cost.**
+**Governed, replayable, cost-auditable multi-agent runs: for when you need to prove what the agents did.**
+
+The audit layer for agent teams: typed hand-offs, blind council review, blocked tools, and a flight recorder that replays any run for $0.
 
 `FastAPI` · `React` · `Turso / libSQL` · `Typed agent hand-offs` · `Council review` · `Event-sourced replay`
 
@@ -14,21 +16,34 @@
 
 ## 💡 The problem and what inspired it
 
-Ask one AI model a hard question and you get one unchecked answer, with no clue
-what it cost or how it got there. Multi-agent tools promise better results, but
-most of them are black boxes: agents pass loose chat to each other, nobody
-reviews the work, and a run can't be reproduced.
+Agents are about to touch money, contracts and compliance decisions. Today it is hard to prove
+what an agent team did, in what order, with which model, and at what cost. Most multi-agent tools
+are black boxes: agents pass loose chat to each other, nobody reviews the work, and a run can't
+be reproduced.
 
+We built the audit layer: typed hand-offs, blind council review and a replayable event log. We
+also measured accuracy ([docs/benchmark.md](docs/benchmark.md)), and a single model was at least
+as good on our checks (8 questions, so treat it as a signal, not a verdict). That is the point:
+**governance is a separate problem from capability**, and this project is about governance.
 
-- simple questions stay cheap and fast, and only hard ones bring in a team;
-- agents hand each other **structured forms**, and a wrong form is sent back
-  with the exact error;
-- several models propose answers, review each other **blind**, and a chairman
-  merges the best (with at least two working models; under provider rate limits a
-  member drops out and it deliberates with fewer);
-- every action is recorded, so any run can be **replayed** and compared;
-- orchestrator runs show their measured time, tokens and cost (quick direct answers
-  record no usage, so they show none).
+<<<<<<< HEAD
+=======
+This project was built for **AgentX Hackathon 2026 (PS-07, Open Track)** by team
+**Bench Warmers**. It makes agent teams *accountable*:
+>>>>>>> 2241420 (Reframe the pitch around the audit layer, not accuracy)
+
+- agents hand each other **structured forms**, and a wrong form is sent back with the exact
+  error, so every hand-off is checked;
+- several models propose answers, review each other **blind**, and a chairman merges the best
+  (with at least two working models; under provider rate limits a member drops out and it
+  deliberates with fewer);
+- every action is recorded in an append-only log, so any run can be **replayed** with the same
+  output and no model call, and compared;
+- undeclared tool calls are blocked and injected instructions quarantined (layers of defence,
+  not a proof of safety);
+- orchestrator runs report their measured time, tokens and cost (quick direct answers record
+  no usage, so they show none);
+- simple questions stay cheap and fast, and only harder ones bring in a team.
 
 ---
 
