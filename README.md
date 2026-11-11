@@ -2,7 +2,7 @@
 
 # 🧭 Agent Council Orchestrator
 
-**An AI assistant that works like a small team: it splits big jobs between specialist agents, checks their work, and shows exactly what every answer cost.**
+**A governed runtime for AI agent teams: typed hand-offs, blocked tools, and a flight recorder that replays any run for $0. It splits big jobs between specialist agents, checks their work, and shows what every answer cost.**
 
 `FastAPI` · `React` · `Turso / libSQL` · `Typed agent hand-offs` · `Council review` · `Event-sourced replay`
 
@@ -37,7 +37,8 @@ that is *accountable*:
 
 | What | Where |
 |---|---|
-| **Live app** | <https://unified-agentic-orchestrator.vercel.app> (checked reachable, HTTP 200) |
+| **Live app** | <https://unified-agentic-orchestrator.vercel.app> |
+| **Best demo goal** | *Evaluate Postgres, MongoDB and DynamoDB independently for a chat app, then recommend one*: compiles to three parallel research branches (goals phrased as independent parts do; a vague goal tends to compile to a sequential chain) |
 | **Demo walkthrough** | [docs/demo-script.md](docs/demo-script.md) |
 | **Saved example runs** | [examples/](examples/): a clean run, a recovered run and an attacked run. **These use scripted stand-in answers, not live models** (see the note under *Data and honesty*). |
 | **Pitch video** | not added yet |
@@ -202,14 +203,21 @@ never appear in logs, events or the website code.
 - The router's speed and cost scores are hand-written estimates in
   `backend/providers/catalog.py`, not live measurements.
 - Tests that need a real Turso database are skipped without one.
+- The council depends on its providers: under rate limits (HTTP 429) or slow replies a member
+  drops out and it deliberates with fewer models. It needs at least two working models.
+- Streamed direct ("fast route") answers record 0 tokens and $0 in the event log, so the cost line
+  under those answers is empty. Orchestrator runs are fully measured.
+- [docs/benchmark.md](docs/benchmark.md): on 8 questions the pipeline was **not** better than one
+  model on the objective checks used, at about 2.4x the cost and 10x the latency. Its value is
+  governance and replay, not accuracy.
 
 **Roadmap**
 
-- Concurrency-safe shared budget across parallel agents.
-- Tests for execution, permissions, replay and persistence that always run in CI
-  without Turso credentials, with real-Turso tests in their own job.
-- A reproducible benchmark: single agent vs sequential vs parallel vs full council,
-  on identical tasks, reported with its limits.
+- Switch on the run-wide budget by default (`RunBudget` exists and is tested, but is opt-in).
+- Real-Turso tests in their own CI job (the persistence tests already run on local SQLite).
+- A quality study of single model vs pipeline with a human or stronger-model judge on 50+
+  prompts (the first small benchmark is in [docs/benchmark.md](docs/benchmark.md)).
+- Record token usage for streamed direct answers.
 - Live cost and latency measurement to replace the router's estimates.
 - A pitch video for the demo links.
 
