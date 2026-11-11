@@ -2,7 +2,14 @@
 
 Three saved runs, exported straight from the event log with
 `python -m backend.demo --export`. Each file is the complete, unedited event
-sequence for one run — not a summary, and not hand-written.
+sequence the engine produced — not a summary.
+
+> **These runs are scripted, not live.** The model answers come from
+> `fixture_completer` in `backend/demo.py`: fixed findings, and the `docs` agent is
+> made to fail on purpose in `run_recovered.json`. No model is called, so token counts,
+> cost and model names are fixture values, not measurements. The engine behaviour
+> they show (events, hand-off checks, repair, compensation, tool blocking, replay)
+> is real.
 
 | File | What it shows | Events |
 |---|---|---|
