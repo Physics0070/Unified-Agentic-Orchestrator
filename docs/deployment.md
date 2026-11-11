@@ -30,6 +30,32 @@ deploys to production.
 `vercel.json` runs `cd frontend && npm install && npm run build` and serves
 `frontend/dist`. `.vercelignore` keeps tests, docs and examples out of the function bundle.
 
+## Where to put the keys
+
+Keys are environment variables on the Vercel project, never in the repo:
+
+1. Open <https://vercel.com> -> your team -> the **unified-agentic-orchestrator** project.
+2. **Settings -> Environment Variables -> Add New**.
+3. Enter the **Key** (for example `NVIDIA_API_KEY`) and paste the **Value**. Tick **Production**
+   (add Preview only if you use preview deployments). Mark secrets as **Sensitive**.
+4. **Save**, then **Deployments -> the latest -> ... -> Redeploy**. A change to an environment
+   variable only reaches a new deployment, so skip this and nothing changes.
+5. Check `https://<your-site>/api/models`: the new provider's models appear once its key is set
+   and its `*_MODELS` variable names at least one model.
+
+| Provider | Key variable | Model variable (comma-separated, no `provider:` prefix) |
+|---|---|---|
+| Groq | `GROQ_API_KEY` | `GROQ_MODELS` (default `openai/gpt-oss-120b,openai/gpt-oss-20b`) |
+| Gemini | `GEMINI_API_KEY` | `GEMINI_MODELS` (default `gemini-3.6-flash`; set blank to drop Gemini) |
+| OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODELS`, e.g. `nvidia/nemotron-3-nano-30b-a3b:free` |
+| NVIDIA NIM (Nemotron) | `NVIDIA_API_KEY` | `NVIDIA_MODELS`, e.g. `nvidia/nemotron-3-nano-30b-a3b` |
+| Ollama Cloud | `OLLAMA_API_KEY` and `OLLAMA_BASE_URL=https://ollama.com` | `OLLAMA_MODELS` |
+
+OpenRouter and NVIDIA contribute **no** models until you name some, so adding a key alone
+changes nothing. Free-tier limits are tight (OpenRouter `:free` is about 50 requests a day, and a
+full orchestrator run makes about a dozen calls), so spread load across providers rather than
+leaning on one.
+
 ## Environment
 
 | Variable | Notes |
@@ -38,6 +64,7 @@ deploys to production.
 | `TURSO_AUTH_TOKEN` | **Secret.** Turso tokens can expire: if runs fail with `event_log_unavailable` and "token expired", create a new token and update this variable |
 | `SECRET_KEY` | Prod refuses to boot without it |
 | `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | **Secret.** At least one provider key. Set `*_MODELS` to a model your key currently lists, or calls return 404 |
+| `OPENROUTER_API_KEY`, `OPENROUTER_MODELS`, `NVIDIA_API_KEY`, `NVIDIA_MODELS` | See "Where to put the keys" above |
 | `ADMIN_TOKEN` | Protects the "set a key from the UI" endpoints (falls back to `SECRET_KEY`) |
 | `CORS_ORIGINS` | Not needed on Vercel (same origin); only for a local Vite dev server |
 | `APP_ENV=prod` | Disables `/docs` |

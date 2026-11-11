@@ -55,7 +55,7 @@ class ProviderHandle:
         """
         if not self._secret:
             return {}
-        if self.provider in ("groq", "openrouter", "ollama", "openai"):
+        if self.provider in ("groq", "openrouter", "ollama", "openai", "nvidia"):
             return {"Authorization": f"Bearer {self._secret}"}
         if self.provider == "gemini":
             return {"x-goog-api-key": self._secret}
@@ -71,6 +71,7 @@ _SPEC = {
     "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
     "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
     "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1"),
+    "nvidia": ("NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1"),
     "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"),
     # OLLAMA_API_KEY is optional (see config.py) - present for Ollama Cloud,
     # absent for a local/tunnelled instance.

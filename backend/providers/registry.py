@@ -14,6 +14,7 @@ from backend.events import EventStore, EventType
 from backend.providers.base import Completion, ProviderAdapter, ProviderError
 from backend.providers.gemini import GeminiAdapter
 from backend.providers.groq import GroqAdapter
+from backend.providers.nvidia import NvidiaAdapter
 from backend.providers.ollama import OllamaAdapter
 from backend.providers.openai import OpenAIAdapter
 from backend.providers.openrouter import OpenRouterAdapter
@@ -33,6 +34,7 @@ _ADAPTERS: dict[str, type[ProviderAdapter]] = {
     "groq": GroqAdapter,
     "gemini": GeminiAdapter,
     "openrouter": OpenRouterAdapter,
+    "nvidia": NvidiaAdapter,
     "openai": OpenAIAdapter,
 }
 

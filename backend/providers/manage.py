@@ -23,7 +23,7 @@ from backend.providers.secret_broker import (
 # Order matters: the first provider's first model is models[0], which answers,
 # is preferred by the planner and chairs the council. Ollama is the tested
 # primary path, so it stays first.
-ORDER = ("ollama", "groq", "gemini", "openai", "openrouter")
+ORDER = ("ollama", "groq", "gemini", "openai", "openrouter", "nvidia")
 
 LABELS = {
     "ollama": "Ollama (Cloud or local)",
@@ -31,6 +31,7 @@ LABELS = {
     "gemini": "Google Gemini",
     "openai": "OpenAI",
     "openrouter": "OpenRouter",
+    "nvidia": "NVIDIA NIM (Nemotron)",
 }
 
 # Models a user may toggle without typing a tag. Not exhaustive and not a claim
@@ -40,7 +41,9 @@ SUGGESTED = {
     "groq": ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
     "gemini": ["gemini-2.0-flash", "gemini-2.5-flash"],
     "openai": ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
-    "openrouter": ["meta-llama/llama-3.3-70b-instruct:free"],
+    "openrouter": ["meta-llama/llama-3.3-70b-instruct:free", "nvidia/nemotron-3-nano-30b-a3b:free"],
+    # Not verified against any account: run the connection test before relying on one.
+    "nvidia": ["nvidia/nemotron-3-nano-30b-a3b"],
 }
 
 # Model lists chosen at runtime. Absent means "use the configured default".
@@ -59,6 +62,7 @@ def configured_models(provider: str) -> list[str]:
         "gemini": settings.gemini_models,
         "openai": settings.openai_models,
         "openrouter": settings.openrouter_models,
+        "nvidia": settings.nvidia_models,
     }.get(provider, ""))
 
 
