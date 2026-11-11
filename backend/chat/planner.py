@@ -217,7 +217,7 @@ def pick_planner_model(models: list[str]) -> str | None:
     if not models:
         return None
     # OpenRouter last: its free models allow ~50 requests a day, which routing would burn first.
-    for prefix in ("groq:", "nvidia:", "gemini:", "openrouter:"):
+    for prefix in ("groq:", "nvidia:", "mistral:", "gemini:", "openrouter:"):
         for m in models:
             if m.startswith(prefix):
                 return m

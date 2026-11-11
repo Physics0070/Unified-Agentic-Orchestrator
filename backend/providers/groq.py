@@ -23,6 +23,7 @@ RATES = {
 class GroqAdapter(ProviderAdapter):
     provider = "groq"
     RATES = RATES
+    SEED_PARAM = "seed"  # Mistral calls it "random_seed"
 
     def _cost(self, model: str, tin: int, tout: int) -> float:
         rate = self.RATES.get(model)
@@ -46,7 +47,7 @@ class GroqAdapter(ProviderAdapter):
 
         body: dict = {"model": model, "messages": messages, "temperature": temperature}
         if seed is not None:
-            body["seed"] = seed
+            body[self.SEED_PARAM] = seed
         if "gpt-oss" in model:
             # Reasoning tokens count against the agent's token budget; at the
             # default effort one answer can exceed it before any JSON appears.
@@ -105,7 +106,7 @@ class GroqAdapter(ProviderAdapter):
             "stream": True,
         }
         if seed is not None:
-            body["seed"] = seed
+            body[self.SEED_PARAM] = seed
         c = self._client(120.0)
         async with c.stream(
             "POST", "/chat/completions", json=body, headers=self.handle.auth_headers()

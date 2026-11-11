@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     # Empty by default, like OpenRouter: a Nemotron model joins the council only once you set
     # NVIDIA_API_KEY and name a model your account serves (check it with the connection test).
     nvidia_models: str = ""
+    mistral_models: str = ""
     # Cap on simultaneous in-flight model calls across the whole council, so a
     # wide fanout cannot blow through the provider's rate limit at once.
     max_concurrent_model_calls: int = Field(default=4, gt=0)

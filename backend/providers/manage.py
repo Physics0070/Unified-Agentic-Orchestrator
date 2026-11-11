@@ -25,7 +25,7 @@ from backend.providers.secret_broker import (
 # Order matters: the first provider's first model is models[0], which answers,
 # is preferred by the planner and chairs the council. Ollama is the tested
 # primary path, so it stays first.
-ORDER = ("ollama", "groq", "gemini", "openai", "openrouter", "nvidia")
+ORDER = ("ollama", "groq", "gemini", "openai", "openrouter", "nvidia", "mistral")
 
 LABELS = {
     "ollama": "Ollama (Cloud or local)",
@@ -34,6 +34,7 @@ LABELS = {
     "openai": "OpenAI",
     "openrouter": "OpenRouter",
     "nvidia": "NVIDIA NIM (Nemotron)",
+    "mistral": "Mistral",
 }
 
 # Models a user may toggle without typing a tag. Not exhaustive and not a claim
@@ -46,6 +47,7 @@ SUGGESTED = {
     "openrouter": ["meta-llama/llama-3.3-70b-instruct:free", "nvidia/nemotron-3-nano-30b-a3b:free"],
     # Not verified against any account: run the connection test before relying on one.
     "nvidia": ["nvidia/nemotron-3-nano-30b-a3b"],
+    "mistral": ["mistral-large-latest", "mistral-small-latest"],
 }
 
 # Model lists chosen at runtime. Absent means "use the configured default".
@@ -74,6 +76,7 @@ def configured_models(provider: str) -> list[str]:
         "openai": settings.openai_models,
         "openrouter": settings.openrouter_models,
         "nvidia": settings.nvidia_models,
+        "mistral": settings.mistral_models,
     }.get(provider, ""))
 
 

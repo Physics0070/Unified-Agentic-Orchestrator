@@ -55,7 +55,7 @@ class ProviderHandle:
         """
         if not self._secret:
             return {}
-        if self.provider in ("groq", "openrouter", "ollama", "openai", "nvidia"):
+        if self.provider in ("groq", "openrouter", "ollama", "openai", "nvidia", "mistral"):
             return {"Authorization": f"Bearer {self._secret}"}
         if self.provider == "gemini":
             return {"x-goog-api-key": self._secret}
@@ -72,6 +72,7 @@ _SPEC = {
     "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
     "groq": ("GROQ_API_KEY", "https://api.groq.com/openai/v1"),
     "nvidia": ("NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1"),
+    "mistral": ("MISTRAL_API_KEY", "https://api.mistral.ai/v1"),
     "gemini": ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta"),
     # OLLAMA_API_KEY is optional (see config.py) - present for Ollama Cloud,
     # absent for a local/tunnelled instance.
@@ -91,6 +92,23 @@ def known_providers() -> list[str]:
     return list(_SPEC)
 
 
+# Provider consoles label a key after the model it was created for (build.nvidia.com,
+# La Plateforme), so a deployment may hold it under that name. These are read too, after the
+# standard variable. The key itself is provider-wide, not tied to the model in its name.
+_ALIASES = {
+    "nvidia": ("nemotron_3_ultra_550b_a55b_API_KEY",),
+    "mistral": ("Mistral_Large_4_API_KEY",),
+}
+
+
+def _env_secret(provider: str) -> str | None:
+    env_key, _ = _SPEC[provider]
+    for name in (env_key, *_ALIASES.get(provider, ())):
+        if os.environ.get(name):
+            return os.environ[name]
+    return None
+
+
 # Prefixes of real provider keys. Case-sensitive: "AIza" is Google's, "nvapi-" NVIDIA's.
 _KEY_PREFIXES = ("nvapi-", "sk-", "gsk_", "AIza", "hf_", "xai-", "ghp_", "github_pat_", "pplx-")
 
@@ -103,7 +121,7 @@ def looks_like_secret(text: str) -> bool:
     """
     if text.startswith(_KEY_PREFIXES):
         return True
-    secrets = [os.environ.get(env_key) for env_key, _ in _SPEC.values()]
+    secrets = [_env_secret(p) for p in _SPEC]
     secrets += list(_RUNTIME_KEYS.values())
     return any(s and len(s) > 8 and s in text for s in secrets)
 
@@ -137,15 +155,14 @@ def key_source(provider: str) -> str | None:
     the value itself."""
     if provider in _RUNTIME_KEYS:
         return "runtime"
-    env_key, _ = _SPEC[provider]
-    return "env" if os.environ.get(env_key) else None
+    return "env" if _env_secret(provider) else None
 
 
 def get_handle(provider: str) -> ProviderHandle:
     if provider not in _SPEC:
         raise ValueError(f"unknown provider {provider!r}")
-    env_key, default_url = _SPEC[provider]
-    secret = _RUNTIME_KEYS.get(provider) or os.environ.get(env_key) or None
+    default_url = _SPEC[provider][1]
+    secret = _RUNTIME_KEYS.get(provider) or _env_secret(provider)
 
     if provider == "ollama":
         # Base URL is not a secret, so it comes from settings (backend.config
@@ -168,6 +185,6 @@ def assert_no_key_in(text: str) -> None:
     """Guard for the event-log write path: refuse to persist a payload that
     contains a live key. Cheap, and it turns a silent leak into a crash."""
     for provider, (env_key, _) in _SPEC.items():
-        for secret in (os.environ.get(env_key), _RUNTIME_KEYS.get(provider)):
+        for secret in (_env_secret(provider), _RUNTIME_KEYS.get(provider)):
             if secret and len(secret) > 8 and secret in text:
                 raise RuntimeError(f"refusing to persist payload containing {env_key}")
