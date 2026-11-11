@@ -92,8 +92,9 @@ class Settings(BaseSettings):
     # Configuration rather than code, so switching a provider's models never
     # needs an edit to routes.py. OpenRouter is empty by default: its free tier
     # is unreliable enough that it only joins the mix when asked for.
-    groq_models: str = "openai/gpt-oss-120b"
-    gemini_models: str = "gemini-2.5-flash"
+    # Two models so the council always has >= 2 working members; one alone makes it a single call.
+    groq_models: str = "openai/gpt-oss-120b,openai/gpt-oss-20b"
+    gemini_models: str = "gemini-3.6-flash"
     openai_models: str = "gpt-4o-mini"
     openrouter_models: str = ""
     # Cap on simultaneous in-flight model calls across the whole council, so a

@@ -11,6 +11,8 @@ from backend.providers.base import Completion, ProviderAdapter, ProviderError
 # 0.0 rather than guessing, so an unpriced model under-reports instead of
 # inventing a number - add the row when you point GEMINI_MODEL somewhere new.
 RATES = {
+    # Source: https://ai.google.dev/gemini-api/docs/gemini-3 (3.6 Flash), read 2026-11-11.
+    "gemini-3.6-flash": (1.50, 7.50),
     "gemini-2.5-flash": (0.30, 2.50),
     "gemini-2.0-flash": (0.10, 0.40),
     "gemini-1.5-flash": (0.075, 0.30),
