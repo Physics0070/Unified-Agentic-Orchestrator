@@ -5,16 +5,17 @@ import uuid
 
 import pytest
 
-from backend.config import settings
 from backend.council.compiler import build_graph
 from backend.engine import Executor
 from backend.events import EventStore, EventType
 from backend.metrics import compute
+from backend.metrics.metrics import embeddings_available
 from backend.providers.base import Completion
 from backend.replay import replay_run
 
-pytestmark = pytest.mark.skipif(
-    not (settings.turso_database_url and settings.turso_auth_token), reason="turso not configured"
+needs_embeddings = pytest.mark.skipif(
+    not embeddings_available(),
+    reason="optional embeddings (requirements-embeddings.txt) not installed",
 )
 
 MODELS = ["ollama:llama3.2:3b", "ollama:qwen2.5:7b"]
@@ -130,6 +131,7 @@ async def test_tampered_graph_spec_is_refused(store):
 # ------------------------------------------------------------------ metrics
 
 
+@needs_embeddings
 async def test_metrics_detect_the_duplicate_pair(store):
     rid, _, _ = await _run(store, BRANCHES3)
     m = await compute(store, rid)
@@ -156,6 +158,7 @@ async def test_metrics_detect_the_duplicate_pair(store):
     assert dup_mig < 0.5
 
 
+@needs_embeddings
 async def test_metrics_deduplicate_findings(store):
     rid, _, _ = await _run(store, BRANCHES3)
     m = await compute(store, rid)
@@ -164,6 +167,7 @@ async def test_metrics_deduplicate_findings(store):
     assert m.cost_per_unique_finding is not None
 
 
+@needs_embeddings
 async def test_metrics_report_validity_and_efficiency(store):
     rid, _, result = await _run(store, BRANCHES3)
     m = await compute(store, rid)
@@ -173,6 +177,7 @@ async def test_metrics_report_validity_and_efficiency(store):
     assert 0 < m.branch_utilization <= 1.0
 
 
+@needs_embeddings
 async def test_verdict_names_the_least_valuable_agent(store):
     rid, _, _ = await _run(store, BRANCHES3)
     m = await compute(store, rid)

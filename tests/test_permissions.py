@@ -4,14 +4,9 @@ import uuid
 
 import pytest
 
-from backend.config import settings
 from backend.events import EventStore, EventType
 from backend.permissions import CapabilityGuard, screen, screen_payload
 from backend.permissions.red_agent import POISONED_HANDOFF, RED_AGENT
-
-pytestmark = pytest.mark.skipif(
-    not (settings.turso_database_url and settings.turso_auth_token), reason="turso not configured"
-)
 
 
 @pytest.fixture

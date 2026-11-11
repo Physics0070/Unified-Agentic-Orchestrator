@@ -17,10 +17,6 @@ from backend.engine import AgentSpec, Edge, Executor, GraphSpec, Node
 from backend.events import EventStore, EventType
 from backend.providers.base import Completion
 
-pytestmark = pytest.mark.skipif(
-    not (settings.turso_database_url and settings.turso_auth_token), reason="turso not configured"
-)
-
 # Functional tests below only need a branch to take *some* time, so keep this
 # short - the suite runs these eight times.
 BRANCH_DELAY = 0.3

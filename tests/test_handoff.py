@@ -11,14 +11,8 @@ import uuid
 import httpx
 import pytest
 
-from backend.config import settings
 from backend.events import EventStore, EventType
 from backend.handoff import artifact_store, repair_loop, validate
-
-pytestmark = pytest.mark.skipif(
-    not (settings.turso_database_url and settings.turso_auth_token),
-    reason="turso not configured",
-)
 
 
 def _ollama_reachable() -> bool:

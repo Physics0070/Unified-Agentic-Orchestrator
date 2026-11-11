@@ -12,13 +12,7 @@ import uuid
 
 import pytest
 
-from backend.config import settings
 from backend.events import EventStore, EventType
-
-pytestmark = pytest.mark.skipif(
-    not (settings.turso_database_url and settings.turso_auth_token),
-    reason="TURSO_DATABASE_URL / TURSO_AUTH_TOKEN not configured",
-)
 
 GRAPH = {"version": 1, "nodes": [], "edges": []}
 

@@ -4,7 +4,6 @@ import uuid
 
 import pytest
 
-from backend.config import settings
 from backend.council import (
     Proposal,
     Ranking,
@@ -18,9 +17,16 @@ from backend.council import (
 )
 from backend.events import EventStore, EventType
 
-pytestmark = pytest.mark.skipif(
-    not (settings.turso_database_url and settings.turso_auth_token), reason="turso not configured"
-)
+
+def _ollama_up() -> bool:
+    import httpx
+
+    try:
+        httpx.get("http://localhost:11434/api/tags", timeout=1.0)
+        return True
+    except httpx.HTTPError:
+        return False
+
 
 MEMBERS = ["ollama:llama3.2:3b", "ollama:qwen2.5:7b"]
 
@@ -147,6 +153,7 @@ def test_clarify_and_permission_text():
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(not _ollama_up(), reason="live test: needs a running Ollama")
 async def test_council_compiles_a_real_graph():
     async with EventStore() as store:
         rid = str(uuid.uuid4())

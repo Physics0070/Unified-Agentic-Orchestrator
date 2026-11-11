@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel
 
+from backend.engine.run_budget import BudgetExceeded, RunBudget
 from backend.engine.spec import GraphSpec, Node
 from backend.engine.tools import complete_with_tools, register_tools
 from backend.events import EventStore, EventType
@@ -58,10 +59,6 @@ class RunResult(BaseModel):
     compensated: list[str] = []
 
 
-class BudgetExceeded(RuntimeError):
-    pass
-
-
 class Executor:
     def __init__(
         self,
@@ -76,6 +73,7 @@ class Executor:
         depth: int = 0,
         goal: str = "",
         workspace_id: str = "",
+        run_budget: RunBudget | None = None,
     ) -> None:
         self.store = store
         self.graph = graph
@@ -100,6 +98,8 @@ class Executor:
         # Tasks in the same process, so a shared counter would leak between
         # unrelated runs.
         self.depth = depth
+        # Shared with subgraph executors; None = only per-agent budgets apply.
+        self.run_budget = run_budget
 
     # ------------------------------------------------------------------ run
 
@@ -299,6 +299,7 @@ class Executor:
             seed=self.seed, completer=self.completer,
             approvals=self.approvals, clarifications=self.clarifications,
             depth=self.depth + 1, goal=self.goal, workspace_id=self.workspace_id,
+            run_budget=self.run_budget,
         )
         parent_ctx = self._upstream_context(node.id)
         if parent_ctx:
@@ -398,15 +399,28 @@ class Executor:
             if remaining <= 0:
                 raise BudgetExceeded(f"{agent.id} exhausted {agent.budget_tokens} tokens")
 
-            # Plain single completion unless the agent declared tools the
-            # provider can call natively; see engine/tools.py.
-            c = await complete_with_tools(
-                self.completer, self.guard, agent, messages,
-                max_tokens=min(remaining, 1024),
-                seed=self.seed, temperature=0.0,
-                json_mode=schema.get("type", "object") == "object",
-                store=self.store, run_id=self.run_id, node_id=node.id, agent_id=agent.id,
-            )
+            max_out = min(remaining, 1024)
+            # Reserve the worst case (input estimate + max output) before the
+            # call, so parallel agents cannot jointly overspend the run cap.
+            reserved = len(str(messages)) // 4 + max_out
+            if self.run_budget:
+                await self.run_budget.reserve(reserved)
+            try:
+                # Plain single completion unless the agent declared tools the
+                # provider can call natively; see engine/tools.py.
+                c = await complete_with_tools(
+                    self.completer, self.guard, agent, messages,
+                    max_tokens=max_out,
+                    seed=self.seed, temperature=0.0,
+                    json_mode=schema.get("type", "object") == "object",
+                    store=self.store, run_id=self.run_id, node_id=node.id, agent_id=agent.id,
+                )
+            except BaseException:
+                if self.run_budget:
+                    await self.run_budget.settle(reserved, 0, 0.0)
+                raise
+            if self.run_budget:
+                await self.run_budget.settle(reserved, c.tokens_in + c.tokens_out, c.cost_usd)
             # The engine records every completion, whatever produced it. Replay
             # reads exactly these rows, so this must not depend on which
             # completer was injected.
