@@ -7,6 +7,7 @@ change; this module is what lets a user do that swap from the UI (add a key,
 pick models, test the connection) without editing code or redeploying.
 """
 
+import logging
 import time
 
 from backend.config import settings
@@ -16,6 +17,7 @@ from backend.providers.secret_broker import (
     get_handle,
     key_source,
     known_providers,
+    looks_like_secret,
     set_runtime_base_url,
     set_runtime_key,
 )
@@ -50,8 +52,17 @@ SUGGESTED = {
 _RUNTIME_MODELS: dict[str, list[str]] = {}
 
 
+log = logging.getLogger("aco.providers")
+
+
 def _split(csv: str) -> list[str]:
-    return [m.strip() for m in csv.split(",") if m.strip()]
+    models = [m.strip() for m in csv.split(",") if m.strip()]
+    kept = [m for m in models if not looks_like_secret(m)]
+    if len(kept) != len(models):
+        # Never log the value itself: it is a key.
+        dropped = len(models) - len(kept)
+        log.warning("ignored %d model-list entry that looks like an API key", dropped)
+    return kept
 
 
 def configured_models(provider: str) -> list[str]:
@@ -77,6 +88,8 @@ def set_models(provider: str, models: list[str]) -> list[str]:
     for m in models:
         m = m.strip()
         if not m or len(m) > 120 or any(c.isspace() for c in m) or m in clean:
+            continue
+        if looks_like_secret(m):
             continue
         clean.append(m)
     if not clean:

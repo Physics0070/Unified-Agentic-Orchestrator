@@ -91,6 +91,23 @@ def known_providers() -> list[str]:
     return list(_SPEC)
 
 
+# Prefixes of real provider keys. Case-sensitive: "AIza" is Google's, "nvapi-" NVIDIA's.
+_KEY_PREFIXES = ("nvapi-", "sk-", "gsk_", "AIza", "hf_", "xai-", "ghp_", "github_pat_", "pplx-")
+
+
+def looks_like_secret(text: str) -> bool:
+    """True for a string shaped like an API key, or containing a configured key.
+
+    Model lists are published (GET /api/models, /api/providers), so a key pasted into a
+    *_MODELS variable by mistake would be served to anyone. Callers drop such entries.
+    """
+    if text.startswith(_KEY_PREFIXES):
+        return True
+    secrets = [os.environ.get(env_key) for env_key, _ in _SPEC.values()]
+    secrets += list(_RUNTIME_KEYS.values())
+    return any(s and len(s) > 8 and s in text for s in secrets)
+
+
 def set_runtime_key(provider: str, key: str) -> None:
     if provider not in _SPEC:
         raise ValueError(f"unknown provider {provider!r}")
