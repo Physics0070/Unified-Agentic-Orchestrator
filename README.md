@@ -203,6 +203,7 @@ never appear in logs, events or the website code.
 - The router's speed and cost scores are hand-written estimates in
   `backend/providers/catalog.py`, not live measurements.
 - Tests that need a real Turso database are skipped without one.
+- NVIDIA's free endpoint is inconsistent (one empty reply in two tries on the 550B Nemotron, some model ids 404 or time out). Empty replies and 60 s hung calls now fail over to a backup model.
 - The council depends on its providers: under rate limits (HTTP 429) or slow replies a member
   drops out and it deliberates with fewer models. It needs at least two working models.
 - Streamed direct ("fast route") answers record 0 tokens and $0 in the event log, so the cost line

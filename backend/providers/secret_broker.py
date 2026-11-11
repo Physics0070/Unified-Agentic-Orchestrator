@@ -92,12 +92,13 @@ def known_providers() -> list[str]:
     return list(_SPEC)
 
 
-# Provider consoles label a key after the model it was created for (build.nvidia.com,
-# La Plateforme), so a deployment may hold it under that name. These are read too, after the
+# build.nvidia.com labels a key after the model it was created for, so a deployment may hold it
+# under that name. These are read too, after the
 # standard variable. The key itself is provider-wide, not tied to the model in its name.
 _ALIASES = {
-    "nvidia": ("nemotron_3_ultra_550b_a55b_API_KEY",),
-    "mistral": ("Mistral_Large_4_API_KEY",),
+    # Both are keys from build.nvidia.com's per-model "Get API key" pages (NVIDIA keys, not
+    # Mistral's), which work across the NIM catalogue.
+    "nvidia": ("nemotron_3_ultra_550b_a55b_API_KEY", "Mistral_Large_4_API_KEY"),
 }
 
 

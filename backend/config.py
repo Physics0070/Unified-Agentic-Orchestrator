@@ -94,16 +94,20 @@ class Settings(BaseSettings):
     # is unreliable enough that it only joins the mix when asked for.
     # Two models so the council always has >= 2 working members; one alone makes it a single call.
     groq_models: str = "openai/gpt-oss-120b,openai/gpt-oss-20b"
-    gemini_models: str = "gemini-3.6-flash"
+    # Gemini is opt-in: its free tier returned 429 under light load. Set GEMINI_MODELS to enable.
+    gemini_models: str = ""
     openai_models: str = "gpt-4o-mini"
     openrouter_models: str = ""
-    # Empty by default, like OpenRouter: a Nemotron model joins the council only once you set
-    # NVIDIA_API_KEY and name a model your account serves (check it with the connection test).
-    nvidia_models: str = ""
+    # Verified on the live site with a real key (a 550B model: one empty reply in two tries, which
+    # now fails over). Other Nemotron ids tried were 404, slow, or timed out; see docs/benchmark.md.
+    nvidia_models: str = "nvidia/nemotron-3-ultra-550b-a55b"
     mistral_models: str = ""
     # Cap on simultaneous in-flight model calls across the whole council, so a
     # wide fanout cannot blow through the provider's rate limit at once.
     max_concurrent_model_calls: int = Field(default=4, gt=0)
+    # One model call may take this long. A hung or throttled provider is cut off, its call slot
+    # is freed and the backup model is tried, instead of holding a slot for the 120 s HTTP timeout.
+    provider_call_timeout_s: float = Field(default=60.0, gt=0)
 
     # ---------- rate limiting: thresholds are configuration, never constants ----------
     rate_limit_auth: str = "5/minute"

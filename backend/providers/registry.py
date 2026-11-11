@@ -60,6 +60,25 @@ def adapter_for(spec: str) -> tuple[ProviderAdapter, str]:
     return _ADAPTERS[provider](get_handle(provider)), model
 
 
+async def _attempt(adapter: ProviderAdapter, model: str, messages: list[dict], **kw) -> Completion:
+    """One call, bounded in time. The timeout runs inside the slot so waiting for a free slot
+    does not count against it, and a hung call releases its slot when it is cut off."""
+    async with _CALL_SLOTS:
+        try:
+            async with asyncio.timeout(settings.provider_call_timeout_s):
+                result = await adapter.complete(messages, model, **kw)
+        except TimeoutError:
+            raise ProviderError(
+                f"provider call timed out after {settings.provider_call_timeout_s:g}s",
+                retryable=True,
+            ) from None
+    # An empty reply is a failed call: free-tier models sometimes return "" with a 200, which
+    # would otherwise be accepted as an answer. A tool call legitimately has no text.
+    if not result.text.strip() and not result.tool_calls:
+        raise ProviderError("provider returned an empty response", retryable=True)
+    return result
+
+
 async def complete(
     spec: str,
     messages: list[dict],
@@ -83,17 +102,10 @@ async def complete(
     """
     budget.ensure_available(blocking=False)
     adapter, model = adapter_for(spec)
+    call_kw = {"temperature": temperature, "seed": seed, "max_tokens": max_tokens,
+               "tools": tools, "json_mode": json_mode}
     try:
-        async with _CALL_SLOTS:
-            result = await adapter.complete(
-                messages,
-                model,
-                temperature=temperature,
-                seed=seed,
-                max_tokens=max_tokens,
-                tools=tools,
-                json_mode=json_mode,
-            )
+        result = await _attempt(adapter, model, messages, **call_kw)
     except ProviderError as primary_error:
         if not fallback_model:
             if store and run_id:
@@ -124,16 +136,7 @@ async def complete(
                 },
             )
         fb_adapter, fb_model = adapter_for(fallback_model)
-        async with _CALL_SLOTS:
-            result = await fb_adapter.complete(
-                messages,
-                fb_model,
-                temperature=temperature,
-                seed=seed,
-                max_tokens=max_tokens,
-                tools=tools,
-                json_mode=json_mode,
-            )
+        result = await _attempt(fb_adapter, fb_model, messages, **call_kw)
         result.used_fallback = True
 
     budget.record(result.tokens_in + result.tokens_out, result.cost_usd)

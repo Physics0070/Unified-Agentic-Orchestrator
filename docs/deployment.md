@@ -46,10 +46,10 @@ Keys are environment variables on the Vercel project, never in the repo:
 | Provider | Key variable | Model variable (comma-separated, no `provider:` prefix) |
 |---|---|---|
 | Groq | `GROQ_API_KEY` | `GROQ_MODELS` (default `openai/gpt-oss-120b,openai/gpt-oss-20b`) |
-| Gemini | `GEMINI_API_KEY` | `GEMINI_MODELS` (default `gemini-3.6-flash`; set blank to drop Gemini) |
+| Gemini | `GEMINI_API_KEY` | `GEMINI_MODELS` (default blank: opt-in, its free tier returned 429 under light load) |
 | OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODELS`, e.g. `nvidia/nemotron-3-nano-30b-a3b:free` |
-| NVIDIA NIM (Nemotron) | `NVIDIA_API_KEY` (or `nemotron_3_ultra_550b_a55b_API_KEY`) | `NVIDIA_MODELS`, e.g. `nvidia/nemotron-3-nano-30b-a3b` |
-| Mistral | `MISTRAL_API_KEY` (or `Mistral_Large_4_API_KEY`) | `MISTRAL_MODELS`, e.g. `mistral-large-latest` |
+| NVIDIA NIM (Nemotron) | `NVIDIA_API_KEY` (or the per-model names `nemotron_3_ultra_550b_a55b_API_KEY`, `Mistral_Large_4_API_KEY`) | `NVIDIA_MODELS` (default `nvidia/nemotron-3-ultra-550b-a55b`) |
+| Mistral (La Plateforme) | `MISTRAL_API_KEY` | `MISTRAL_MODELS`, e.g. `mistral-large-latest` |
 | Ollama Cloud | `OLLAMA_API_KEY` and `OLLAMA_BASE_URL=https://ollama.com` | `OLLAMA_MODELS` |
 
 OpenRouter and NVIDIA contribute **no** models until you name some, so adding a key alone

@@ -46,7 +46,7 @@ SUGGESTED = {
     "openai": ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
     "openrouter": ["meta-llama/llama-3.3-70b-instruct:free", "nvidia/nemotron-3-nano-30b-a3b:free"],
     # Not verified against any account: run the connection test before relying on one.
-    "nvidia": ["nvidia/nemotron-3-nano-30b-a3b"],
+    "nvidia": ["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-lightning-30b-a3b"],
     "mistral": ["mistral-large-latest", "mistral-small-latest"],
 }
 

@@ -28,7 +28,7 @@ def test_mistral_endpoint_and_key_handling(monkeypatch):
 
 
 @pytest.mark.parametrize("provider, alias", [
-    ("mistral", "Mistral_Large_4_API_KEY"),
+    ("nvidia", "Mistral_Large_4_API_KEY"),
     ("nvidia", "nemotron_3_ultra_550b_a55b_API_KEY"),
 ])
 def test_a_key_saved_under_a_per_model_name_is_accepted(monkeypatch, provider, alias):
@@ -38,9 +38,9 @@ def test_a_key_saved_under_a_per_model_name_is_accepted(monkeypatch, provider, a
 
 
 def test_the_standard_name_wins_over_the_alias(monkeypatch):
-    monkeypatch.setenv("MISTRAL_API_KEY", "standard-key-12345")
+    monkeypatch.setenv("NVIDIA_API_KEY", "standard-key-12345")
     monkeypatch.setenv("Mistral_Large_4_API_KEY", "alias-key-12345")
-    assert get_handle("mistral").auth_headers() == {"Authorization": "Bearer standard-key-12345"}
+    assert get_handle("nvidia").auth_headers() == {"Authorization": "Bearer standard-key-12345"}
 
 
 def test_it_contributes_models_only_when_named(monkeypatch):
