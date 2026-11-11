@@ -82,7 +82,7 @@ that is *accountable*:
 | **Security** | slowapi (rate limits), PyJWT (sessions), python-magic (upload type checks) |
 | **Extras** | scikit-learn (Workflow DNA fitness prediction), optional local embeddings |
 | **Tooling** | pytest, ruff, pip-audit, GitHub Actions |
-| **Hosting** | Vercel (free), Render (always on), Docker |
+| **Hosting** | Vercel |
 
 ---
 
@@ -143,16 +143,10 @@ runs the tests, the linter, the audit and the frontend build on every pull reque
 
 ### Put it online
 
-- **Render (always on).** One service serves the website and the API with no
-  5-minute limit, so pause, resume, cancel and live streaming all work. See
-  [docs/render.md](docs/render.md) and `render.yaml`. The free tier sleeps when
-  idle and takes about a minute to wake.
-- **Vercel (free).** `vercel deploy --prod`, then add your Turso values and a
-  provider key under **Settings → Environment Variables**. An orchestrator run must
-  finish within one request (under 5 minutes), and pause/resume/cancel are not
-  available. Ollama on `localhost` is not reachable there.
-
-Firebase's free plan cannot run this backend, so it is not supported. More in
+Vercel is the only supported deployment. `vercel deploy --prod`, then add your Turso
+values and a provider key under **Settings → Environment Variables**. An orchestrator
+run must finish within one request (under 5 minutes), and pause, resume and cancel
+are not available. Ollama on `localhost` is not reachable there. Details in
 [docs/deployment.md](docs/deployment.md).
 
 ---
@@ -185,9 +179,10 @@ never appear in logs, events or the website code.
 
 **Challenges we hit and how we handled them**
 
-- **Serverless time limits.** Vercel ends a request after 5 minutes, which can't
-  hold a long agent run. We added an always-on Render deployment for long runs and
-  pause/resume.
+- **Serverless time limits.** Vercel ends a request after 5 minutes and freezes a
+  function once it responds, so a run executes inline inside one request
+  (`POST /api/runs/{id}/execute`). The cost: runs must finish within 5 minutes, and
+  pause, resume and cancel are unavailable there.
 - **Agents that return malformed output.** Free-form chat between agents broke
   easily, so hand-offs became typed forms with the exact error sent back for a retry.
 - **Reproducing a run.** Instead of scattered logs, everything is one append-only
@@ -243,7 +238,6 @@ for the clean run).
 - [docs/threat-model.md](docs/threat-model.md): permissions, prompt-injection checks, key handling
 - [docs/reproducibility.md](docs/reproducibility.md): how replay gives identical results
 - [docs/deployment.md](docs/deployment.md): hosting notes
-- [docs/render.md](docs/render.md): Render step by step
 - [examples/](examples/): saved runs (clean, recovered, attacked)
 
 ## 🔧 Troubleshooting

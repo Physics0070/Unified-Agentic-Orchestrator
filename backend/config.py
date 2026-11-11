@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # ---------- application ----------
     app_env: Literal["dev", "test", "prod"] = "dev"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    # Render sets $PORT itself; 7860 is only the local-dev fallback.
+    # 7860 is the local-dev port.
     port: int = 7860
 
     # ---------- persistence ----------
@@ -62,9 +62,6 @@ class Settings(BaseSettings):
     # so a shipped fallback secret can never silently become the live one.
     secret_key: str = ""
     cors_origins: str = "http://localhost:5173"
-    # Single Netlify (or other) frontend origin, added to cors_origin_list.
-    # Blank in dev on purpose - see _require_secrets_in_prod.
-    frontend_origin: str = ""
     max_upload_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
     # Guards the provider-management write endpoints (setting/clearing a key at
     # runtime). Falls back to SECRET_KEY; when both are blank the endpoints are
@@ -158,8 +155,7 @@ class Settings(BaseSettings):
         Turso is optional (EventStore falls back to a local sqlite file and
         logs a warning that it is lost on an ephemeral disk). Provider keys
         are read by secret_broker and may also be pasted at runtime, so they are
-        not checked here. FRONTEND_ORIGIN is only needed when the frontend is
-        hosted on a different origin than the API.
+        not checked here.
         """
         if self.is_prod:
             if not self.secret_key:

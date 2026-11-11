@@ -6,8 +6,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
-    // In dev the API runs separately; in the Docker image FastAPI serves this
-    // build from the same origin, so no proxy is needed there.
+    // In dev the API runs separately; in production the API shares the origin.
     proxy: {
       '/health': 'http://localhost:7860',
       '/api': 'http://localhost:7860',

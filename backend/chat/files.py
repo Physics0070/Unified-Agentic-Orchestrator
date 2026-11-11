@@ -1,7 +1,7 @@
 """On-demand file generation for chat: an actual file, not a description of one.
 
 Deliberately not persisted anywhere - generated on demand and held in an
-in-memory cache with a short TTL, served once. Render's free-tier disk is
+in-memory cache with a short TTL, served once. A serverless function's disk is
 ephemeral, so pretending this is a durable store would be dishonest; a chat
 turn is not a document management system. Ask again and it regenerates.
 

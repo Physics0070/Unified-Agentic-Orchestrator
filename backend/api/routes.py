@@ -361,7 +361,7 @@ async def chat(
             log.exception("chat turn failed")
             yield {"event": "error", "data": json.dumps({"detail": str(e)[:300]})}
 
-    # ping + anti-buffering header, matching /runs/{run_id}/stream - Render's
+    # ping + anti-buffering header, matching /runs/{run_id}/stream - the host's
     # edge is nginx-family and buffers a response by default, which would hold
     # the whole stream until it ends.
     return EventSourceResponse(gen(), ping=15, headers={"X-Accel-Buffering": "no"})
@@ -850,7 +850,7 @@ async def stream(
 
     # ping: an SSE comment every 15s so a proxy or load balancer sees traffic
     # on an otherwise-quiet long poll and doesn't time the connection out.
-    # X-Accel-Buffering: nginx-family proxies (which Render's edge is) buffer
+    # X-Accel-Buffering: nginx-family proxies (which most edges are) buffer
     # a response by default, which would hold the whole stream until it ends -
     # exactly what a live tail must not do.
     return EventSourceResponse(gen(), ping=15, headers={"X-Accel-Buffering": "no"})

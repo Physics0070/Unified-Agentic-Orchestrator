@@ -252,7 +252,7 @@ class EventStore:
                 _WARNED_FALLBACK = True
                 log.warning(
                     "TURSO_DATABASE_URL is blank: using a local SQLite file at %s. On an "
-                    "ephemeral or read-only host (Render free, Vercel) the event log will "
+                    "ephemeral or read-only host (Vercel) the event log will "
                     "not survive a redeploy - set TURSO_DATABASE_URL for durable history.",
                     self._path,
                 )

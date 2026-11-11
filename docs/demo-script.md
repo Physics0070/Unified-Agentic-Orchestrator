@@ -5,18 +5,17 @@ are the three nobody else will have — protect them if time runs short.
 
 **Before you start:**
 
-- Browser already open on the deployed frontend
-  (`https://sprightly-salmiakki-bb8ed0.netlify.app`), **chat** tab. Backend is
-  Render (`aco-backend-52wf.onrender.com`) - free tier, sleeps after 15 min
-  idle, ~50s to wake. **Load it and ask one throwaway question at least a
-  minute before you go on**, so it's already warm.
+- Browser already open on the deployed app
+  (`https://unified-agentic-orchestrator.vercel.app`), **chat** tab. **Load it and
+  ask one throwaway question at least a minute before you go on**, so the
+  function is already warm.
 - Model provider is Ollama Cloud by default (`gpt-oss:120b-cloud`), with Groq
   and Gemini configured too - `/api/models` should list all three. Step 0's
   "instant" framing is still true (Ollama Cloud first token ~2.5s), just
   update the specific seconds if you re-measure on the night.
 - ⚠️ **Embeddings-based metrics (Marginal Information Gain, redundancy/overlap,
   the "89% identical" callout, the whole Pareto table in step 10) are NOT
-  available on the deployed Render backend** - `sentence-transformers` is a
+  available on the deployed Vercel backend** - `sentence-transformers` is a
   ~1GB optional dependency deliberately not shipped on a free-tier box; live
   it reports `embeddings_available: false` honestly instead of faking a
   number. It IS installed locally. For steps 0 (overlap row) and 10 (the
@@ -301,7 +300,7 @@ Read the recommendation verbatim:
 
 ## If something breaks on stage
 
-- **Render backend is asleep / slow to wake** → free tier, ~50s cold start.
+- **First request is slow** → Vercel function cold start; ask one throwaway question beforehand.
   This is why you warm it a minute before going on. If it happens anyway,
   say so plainly and use the wait to explain the architecture.
 - **A model provider is rate-limited or down** → the engine already handles

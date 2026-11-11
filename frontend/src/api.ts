@@ -147,11 +147,8 @@ export interface MarginalValueReport {
 }
 
 /**
- * Empty by default: FastAPI serves this bundle from the same origin, so relative
- * paths just work. Set VITE_API_BASE when the frontend is hosted separately
- * (Vercel/Netlify static + the backend on a container host) — the backend cannot
- * run on a serverless platform, since SSE and multi-minute runs outlive a
- * function invocation.
+ * Empty by default: on Vercel the API shares the frontend's origin, and locally
+ * FastAPI serves this bundle, so relative paths just work.
  */
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
 

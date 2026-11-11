@@ -1,5 +1,5 @@
 """FastAPI entrypoint. One process serves the API and, when frontend/dist
-exists, the built React app (single-origin deployment, e.g. one Render service).
+exists, the built React app (single-origin deployment, e.g. local uvicorn).
 
 Run from the repository root:
     uvicorn backend.main:app --host 0.0.0.0 --port $PORT
@@ -98,21 +98,11 @@ class SecurityHeadersMiddleware:
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
-# FRONTEND_ORIGIN is the production Netlify (or custom) domain, exact match.
-# The regex additionally covers Netlify's preview subdomains, which use two
-# different shapes (deploy-preview-12--site.netlify.app,
-# branch-name--site.netlify.app) - matching on the .netlify.app suffix rather
-# than either shape specifically is what makes both work. This is a specific
-# suffix pattern, not the literal "*" wildcard, so it is safe to combine with
-# allow_credentials=True (Starlette reflects the matched origin, never "*").
-_cors_origins = list(settings.cors_origin_list)
-if settings.frontend_origin and settings.frontend_origin not in _cors_origins:
-    _cors_origins.append(settings.frontend_origin)
-
+# Same-origin on Vercel, so CORS only matters for the local Vite dev server
+# (CORS_ORIGINS, default http://localhost:5173). Explicit list, never "*".
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_origin_regex=r"^https://[a-zA-Z0-9-]+\.netlify\.app$",
+    allow_origins=list(settings.cors_origin_list),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],

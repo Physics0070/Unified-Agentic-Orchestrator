@@ -12,7 +12,7 @@ has, and nothing should stop the app from starting when a switch is off.
    SQLite; a real `libsql://` URL uses Turso.
 2. **Secrets live in env vars only.** Add the *name* to `.env.example` with a
    comment, never the value. Real values go in the host's settings (Vercel /
-   Render dashboard) and each developer's untracked `.env`.
+   Vercel dashboard) and each developer's untracked `.env`.
 3. **One concern per pull request.** Storage, sign-in and UI changes land as
    separate PRs so each can be reviewed and reverted on its own.
 4. **Additive changes.** New routers and modules; existing files get one-line
