@@ -26,12 +26,6 @@ also measured accuracy ([docs/benchmark.md](docs/benchmark.md)), and a single mo
 as good on our checks (8 questions, so treat it as a signal, not a verdict). That is the point:
 **governance is a separate problem from capability**, and this project is about governance.
 
-<<<<<<< HEAD
-=======
-This project was built for **AgentX Hackathon 2026 (PS-07, Open Track)** by team
-**Bench Warmers**. It makes agent teams *accountable*:
->>>>>>> 2241420 (Reframe the pitch around the audit layer, not accuracy)
-
 - agents hand each other **structured forms**, and a wrong form is sent back with the exact
   error, so every hand-off is checked;
 - several models propose answers, review each other **blind**, and a chairman merges the best
