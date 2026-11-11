@@ -19,9 +19,6 @@ what it cost or how it got there. Multi-agent tools promise better results, but
 most of them are black boxes: agents pass loose chat to each other, nobody
 reviews the work, and a run can't be reproduced.
 
-This project was built for **AgentX Hackathon 2026 (PS-07, Open Track)** by team
-**Bench Warmers**. We wanted a team of agents
-that is *accountable*:
 
 - simple questions stay cheap and fast, and only hard ones bring in a team;
 - agents hand each other **structured forms**, and a wrong form is sent back
