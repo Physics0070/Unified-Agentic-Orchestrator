@@ -13,6 +13,7 @@ import logging
 
 from backend.council.council import Verdict, deliberate
 from backend.engine.spec import AgentSpec, Edge, GraphSpec, Node
+from backend.engine.tools import supports_tools
 from backend.events import EventStore, EventType
 from backend.providers.catalog import rank_models
 from backend.providers.websearch import needs_fresh_data, render_results, web_search
@@ -130,9 +131,24 @@ def schemas_for(intent: str) -> tuple[dict, dict]:
 ALLOWED_TOOLS = {"read_file", "list_files"}
 
 
+def _fallback_for(model: str, candidates: list[str]) -> str | None:
+    """A different model to retry on if `model` fails, preferring another provider.
+
+    A dead key or a retired model name takes a whole provider's models down
+    together, so a same-provider backup rarely helps. A backup is never allowed
+    to switch off a tool-capable agent's tools: `supports_tools` needs the primary
+    *and* the fallback to speak native tool calling.
+    """
+    no_tools_to_lose = not supports_tools(model)  # a non-tool primary has no tools to lose
+    pool = [m for m in candidates if m != model and (no_tools_to_lose or supports_tools(m))]
+    other_provider = [m for m in pool if m.partition(":")[0] != model.partition(":")[0]]
+    return (other_provider or pool or [None])[0]
+
+
 def _branch_agent(
     bid: str, role: str, tools: list[str], model: str, schema: dict,
     web_context: str = "", after: list[str] | None = None,
+    fallback_model: str | None = None,
 ) -> AgentSpec:
     upstream = (
         f"You receive the outputs of upstream stages ({', '.join(after)}); build on them.\n"
@@ -149,6 +165,7 @@ def _branch_agent(
         ),
         tools=[t for t in tools if t in ALLOWED_TOOLS],
         model=model,
+        fallback_model=fallback_model,
         output_schema=schema,
         budget_tokens=4000,
         timeout_s=180,
@@ -263,11 +280,12 @@ def build_graph(
     # every depth it compares still ranks identically). See
     # backend/providers/catalog.py.
     ranked = rank_models(models, intent)
+    candidates = [name for name, _ in ranked]
     for i, b in enumerate(clean):
         model = ranked[i % len(ranked)][0]
         nodes.append(Node(id=b["id"], type="agent", agent=_branch_agent(
             b["id"], b["role"], b["tools"], model, findings_schema, web_context,
-            b["depends_on"]),
+            b["depends_on"], fallback_model=_fallback_for(model, candidates)),
             max_retries=1))
         # No deps: hang off fanout. Deps: receive each upstream agent's output.
         for src in b["depends_on"] or ["fanout"]:
@@ -293,8 +311,9 @@ def build_graph(
             id="verifier",
             role="Independent verification of the merged output",
             system_contract=verifier_contract,
-            tools=[], model=verifier_model, output_schema=report_schema,
-            budget_tokens=4000, timeout_s=180,
+            tools=[], model=verifier_model,
+            fallback_model=_fallback_for(verifier_model, candidates),
+            output_schema=report_schema, budget_tokens=4000, timeout_s=180,
         ),
     ))
     edges.append(Edge(from_node="join", to_node="verify", handoff_schema=report_schema))
