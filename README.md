@@ -2,7 +2,7 @@
 
 # 🧭 Agent Council Orchestrator
 
-**A governed runtime for AI agent teams: typed hand-offs, blocked tools, and a flight recorder that replays any run for $0. It splits big jobs between specialist agents, checks their work, and shows what every answer cost.**
+**A governed runtime for AI agent teams: typed hand-offs, blocked tools, and a flight recorder that replays any run for $0. It splits big jobs between specialist agents, checks their work, and shows what its runs cost.**
 
 `FastAPI` · `React` · `Turso / libSQL` · `Typed agent hand-offs` · `Council review` · `Event-sourced replay`
 
@@ -27,9 +27,11 @@ that is *accountable*:
 - agents hand each other **structured forms**, and a wrong form is sent back
   with the exact error;
 - several models propose answers, review each other **blind**, and a chairman
-  merges the best;
+  merges the best (with at least two working models; under provider rate limits a
+  member drops out and it deliberates with fewer);
 - every action is recorded, so any run can be **replayed** and compared;
-- every answer shows its time, tokens and money.
+- orchestrator runs show their measured time, tokens and cost (quick direct answers
+  record no usage, so they show none).
 
 ---
 
@@ -38,8 +40,8 @@ that is *accountable*:
 | What | Where |
 |---|---|
 | **Live app** | <https://unified-agentic-orchestrator.vercel.app> |
-| **Best demo goal** | *Evaluate Postgres, MongoDB and DynamoDB independently for a chat app, then recommend one*: compiles to three parallel research branches (goals phrased as independent parts do; a vague goal tends to compile to a sequential chain) |
-| **Demo walkthrough** | [docs/demo-script.md](docs/demo-script.md) |
+| **Best demo goal** | *Evaluate Postgres, MongoDB and DynamoDB independently for a chat app, then recommend one*: sometimes compiles to three parallel research branches (3 of 6 compiles in our tests; the other 3, including the last three live runs, were a sequential chain, because a model plans the graph) |
+| **Demo walkthrough** | [docs/demo-script.md](docs/demo-script.md) (3 minutes, with the measured numbers to expect) |
 | **Saved example runs** | [examples/](examples/): a clean run, a recovered run and an attacked run. **These use scripted stand-in answers, not live models** (see the note under *Data and honesty*). |
 | **Pitch video** | not added yet |
 
@@ -51,11 +53,14 @@ that is *accountable*:
   team. A router scores each model on quality, cost and speed.
 - **Orchestrator mode.** Give it a goal. It asks clarifying questions, asks your
   permission, designs a team of agents, draws it as a graph, waits for your
-  approval, runs the agents (in parallel where it can) and streams live progress.
+  approval, runs the agents and streams live progress. Independent parts run in
+  parallel, but a model plans the graph, so vague goals often compile to a sequential
+  chain (measured parallel efficiency 0.77 to 0.83 on such runs).
 - **Typed hand-offs.** Agents pass each other schema-checked forms, not loose chat.
   If a form is wrong, the exact error goes back and the agent tries again.
 - **Council review.** Several models propose, review each other without seeing who
-  wrote what, and a chairman merges the best.
+  wrote what, and a chairman merges the best. Default members: Groq `gpt-oss-120b` and
+  `gpt-oss-20b` plus NVIDIA Nemotron 550B. It needs at least two working members.
 - **Agent tools.** Calculator, web search and a lookup in your uploaded documents.
   Only tools an agent is allowed to use can run.
 - **Knowledge workspace.** Upload PDF, Word, PowerPoint, Excel, text, Markdown or
@@ -63,9 +68,9 @@ that is *accountable*:
 - **Execution trace.** For every agent: input, output, tools used, time, tokens,
   cost and status.
 - **Replay.** Every action goes into one append-only log, so any run can be
-  replayed and compared.
-- **Many providers.** Groq, Gemini, OpenAI, OpenRouter and Ollama. Set a key and
-  pick the models.
+  replayed and compared. Measured on the live site: identical output, $0 cost, no model call.
+- **Many providers.** Groq and NVIDIA NIM (Nemotron) by default; OpenRouter, Mistral,
+  Gemini, OpenAI and Ollama are supported and opt-in. Set a key and name the models.
 - **Safety limits.** Per-IP rate limits and a daily token cap protect your API key
   on a public site. Optional user accounts (email and password).
 
@@ -78,7 +83,7 @@ that is *accountable*:
 | **Backend** | Python 3.11+, FastAPI, Pydantic, httpx, sse-starlette (live streaming), jsonschema (hand-off checks) |
 | **Database** | Turso / libSQL, with a local SQLite file fallback |
 | **Frontend** | React 18, TypeScript, Vite 6, Tailwind CSS 4, React Flow (agent graph) |
-| **AI providers** | Groq, Gemini, OpenAI, OpenRouter, Ollama |
+| **AI providers** | Groq, NVIDIA NIM, OpenRouter, Mistral, Gemini, OpenAI, Ollama |
 | **Documents and tools** | pypdf, python-docx, python-pptx, openpyxl, fpdf2, DuckDuckGo search (`ddgs`) |
 | **Security** | slowapi (rate limits), PyJWT (sessions), python-magic (upload type checks) |
 | **Extras** | scikit-learn (Workflow DNA fitness prediction), optional local embeddings |
@@ -139,8 +144,10 @@ ruff check .                               # code style and security lint
 pip-audit -r requirements.txt --strict     # known vulnerabilities
 ```
 
-Some tests need a real Turso database and are skipped without one. GitHub Actions
-runs the tests, the linter, the audit and the frontend build on every pull request.
+The suite runs on a local SQLite database, so it needs no credentials. A few tests skip
+without optional extras (the embeddings package, a live Ollama). Nothing runs against a real
+Turso database in CI yet. GitHub Actions runs the tests, the linter, the audit and the
+frontend build.
 
 ### Put it online
 
@@ -161,10 +168,12 @@ quotes. **Every setting is listed in [.env.example](.env.example).**
 |---|---|---|
 | `TURSO_DATABASE_URL` | recommended | Database address, like `libsql://name.turso.io` |
 | `TURSO_AUTH_TOKEN` | with Turso | Database token |
-| `GROQ_API_KEY` | one provider needed | Groq key. Default model: `openai/gpt-oss-120b` |
-| `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | optional | More providers to widen the team |
+| `GROQ_API_KEY` | one provider needed | Groq key. Default models: `openai/gpt-oss-120b`, `openai/gpt-oss-20b` |
+| `NVIDIA_API_KEY` | optional | NVIDIA NIM key. Default model: `nvidia/nemotron-3-ultra-550b-a55b` |
+| `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` | optional | More providers; each joins the council only when its `*_MODELS` names a model (Gemini and OpenRouter default to none) |
 | `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` | optional | Ollama (local, or Ollama Cloud) |
-| `GROQ_MODELS`, `GEMINI_MODELS`, `OPENAI_MODELS` | optional | Pick models per provider, comma separated |
+| `GROQ_MODELS`, `NVIDIA_MODELS`, `OPENROUTER_MODELS`, `MISTRAL_MODELS`, `GEMINI_MODELS`, `OPENAI_MODELS` | optional | Pick models per provider, comma separated. Entries that look like an API key are ignored (model lists are public) |
+| `PROVIDER_CALL_TIMEOUT_S` | optional | Cut off one model call after this many seconds and fail over (default 60) |
 | `ADMIN_TOKEN` | for public sites | Protects the "set a key from the UI" endpoints (falls back to `SECRET_KEY`) |
 | `SECRET_KEY` | for public sites / accounts | Signs sessions; required when `AUTH_REQUIRED` is on |
 | `AUTH_REQUIRED` | optional | `true` = runs, compile, clarify and knowledge need a signed-in user |
@@ -187,8 +196,9 @@ never appear in logs, events or the website code.
 - **Agents that return malformed output.** Free-form chat between agents broke
   easily, so hand-offs became typed forms with the exact error sent back for a retry.
 - **Reproducing a run.** Instead of scattered logs, everything is one append-only
-  event table. The trace, replay, metrics and pause/resume are just different ways
-  of reading it.
+  event table. The trace, replay and metrics are just different ways of reading it
+  (pause, resume and cancel are implemented too, but need a persistent process, so
+  they are not available on Vercel).
 - **Protecting a public API key.** Per-IP rate limits, a daily token cap, tool
   allow-lists and optional sign-in.
 
@@ -202,8 +212,12 @@ never appear in logs, events or the website code.
 - On Vercel, a fresh upload can take a moment to show on another instance.
 - The router's speed and cost scores are hand-written estimates in
   `backend/providers/catalog.py`, not live measurements.
-- Tests that need a real Turso database are skipped without one.
-- NVIDIA's free endpoint is inconsistent (one empty reply in two tries on the 550B Nemotron, some model ids 404 or time out). Empty replies and 60 s hung calls now fail over to a backup model.
+- Free tiers are small and inconsistent. Groq's is about 200K tokens a day and 8K a minute on
+  `gpt-oss-120b` (one run uses about 4,000 to 6,000 tokens, so a few judges can exhaust it),
+  Gemini returned 429 under light load (so it is opt-in), and NVIDIA's free endpoint gave one
+  empty reply in two tries on the 550B Nemotron while other Nemotron ids returned 404 or timed
+  out. A hung call is cut off after 60 s and an empty reply counts as a failure; both fail over
+  to a backup model.
 - The council depends on its providers: under rate limits (HTTP 429) or slow replies a member
   drops out and it deliberates with fewer models. It needs at least two working models.
 - Streamed direct ("fast route") answers record 0 tokens and $0 in the event log, so the cost line
@@ -220,7 +234,7 @@ never appear in logs, events or the website code.
   prompts (the first small benchmark is in [docs/benchmark.md](docs/benchmark.md)).
 - Record token usage for streamed direct answers.
 - Live cost and latency measurement to replace the router's estimates.
-- A pitch video for the demo links.
+- Link the demo video above once it is uploaded.
 
 ---
 

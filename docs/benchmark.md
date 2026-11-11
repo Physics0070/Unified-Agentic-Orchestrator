@@ -35,7 +35,7 @@ Each question goes to both arms with identical text, once each, sequentially.
 | All spend / completed answers | $0.00079 | $0.00190 |
 | Answer mentions every option asked about | 6 of 8 | 4 of 8 |
 | Answer makes an explicit pick | 7 of 8 | 6 of 8 |
-| Hand-offs passing their typed contract | not applicable | 100% on all 6 completed runs |
+| Hand-offs passing their typed contract | not applicable | 100% on all 6 completed runs (in an earlier pass with a flawed client, completed runs showed 0.67 to 0.83 because repairs were needed) |
 
 Ratios (B over A): about 4.9x tokens, 2.4x cost per completed answer, 10.5x median latency.
 

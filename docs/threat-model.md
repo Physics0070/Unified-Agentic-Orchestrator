@@ -96,8 +96,11 @@ a key. Grep any key name and one file comes back.
   second place they could leak from.
 - `assert_no_key_in()` guards the artifact write path: a payload that somehow
   contains a live key crashes rather than being persisted.
-- The service key is server-side only; the browser talks to our API, never to
-  Supabase.
+- The database token (`TURSO_AUTH_TOKEN`) is server-side only; the browser talks to our API,
+  never to Turso.
+- Model lists are published (`GET /api/models`, `/api/providers`), so any `*_MODELS` entry that
+  looks like an API key, or contains a configured key, is dropped before it can be served. This
+  was added after a key pasted into `OPENROUTER_MODELS` was briefly served publicly.
 
 ---
 
@@ -136,7 +139,7 @@ construction.
 | Rate limiting | `slowapi`, all thresholds from env vars, nothing hardcoded |
 | Error handling | Global handler returns `{"error":"internal_error"}`. Stack traces, file paths and raw DB errors never reach a client; full detail to server logs |
 | CORS | Explicit allow-list; `*` raises at startup |
-| Prod boot | Refuses to start without `SECRET_KEY` and Supabase config, so a shipped default can never silently become the live one |
+| Prod boot | Refuses to start without `SECRET_KEY`, so a shipped default can never silently become the live one. Turso is optional: without it the log falls back to a local SQLite file and a warning is logged |
 | API docs | Disabled when `APP_ENV=prod` |
 | Dependencies | `pip-audit -r requirements.txt --strict` clean; 25 CVEs across 5 packages were found and fixed during the build |
 | Secrets in git | `.env` gitignored and verified absent; CI fails if it is ever tracked |
@@ -156,10 +159,11 @@ construction.
 ## Known gaps, stated
 
 1. **Injection screening is pattern-based** (§2). Not a solved problem.
-2. **No authentication.** The demo is single-tenant. Rate limiting is per-IP;
-   there are no accounts, so there is no per-account limiting yet.
-3. **Artifacts over 200 KB** record a truncation marker rather than uploading to
-   Supabase Storage. No demo artifact approaches that size, and an untested
-   upload path is worse than a stated gap. Marked `TODO(block-12)`.
+2. **Authentication is optional and off by default.** Anonymous use is the default, so a public
+   deployment is protected by per-IP rate limits and a daily token cap, not by accounts. Setting
+   `AUTH_REQUIRED=true` (with `SECRET_KEY`) requires a signed-in user for runs, compile, clarify
+   and knowledge.
+3. **Artifacts over 200 KB** record a truncation marker rather than being stored in full; there
+   is no object storage. No demo artifact approaches that size.
 4. **Tool registry is minimal.** The guard is proven; the library of real tools
    behind it is small.

@@ -2,8 +2,9 @@
 
 ## Why event sourcing
 
-One append-only Postgres table is the single source of truth. This is the
-decision the rest of the system falls out of.
+One append-only table in Turso (libSQL, a SQLite dialect) is the single source of truth, with a
+local SQLite file as the no-account fallback. This is the decision the rest of the system falls
+out of.
 
 Six requirements in the problem statement are, structurally, the same
 requirement — they are all *reads* of one ordered log:
@@ -13,9 +14,9 @@ requirement — they are all *reads* of one ordered log:
 | Observability dashboard (62) | `SELECT * FROM events WHERE run_id = ?` |
 | Replay a completed run (67) | Re-execute, serving completions from the log |
 | All metrics (69) | Aggregate over event types |
-| Trace viewer, pause/resume/cancel (74) | Tail the log via SSE; controls append events |
+| Trace viewer, pause/resume/cancel (74) | Tail the log via SSE; controls append events. Pause, resume and cancel need a persistent process, so they work under local `uvicorn` but **not on the Vercel deployment** (a function is frozen once it responds) |
 | Reproducibility report (77) | Compare two runs' logs |
-| Marginal value of each agent (70) | Embed the validated outputs recorded in the log |
+| Marginal value of each agent (70) | Embed the validated outputs recorded in the log. Needs the optional embeddings package (about 1 GB), which is **not installed on Vercel**, so the live app reports these metrics as unavailable |
 
 Building one structure well beat building six features shallowly.
 
@@ -28,21 +29,18 @@ The obvious implementation of "next seq for this run" is
 `SELECT MAX(seq)+1 FROM events WHERE run_id = ?`. It is wrong under concurrency:
 two branches of a fanout read the same maximum and one loses on the primary key.
 
-Instead `runs` carries a `last_seq` column and appends go through a function:
+Instead `runs` carries a `last_seq` column. Turso has no stored functions, so an append is one
+transaction of two statements: `UPDATE runs SET last_seq = last_seq + 1 WHERE run_id = ?
+RETURNING last_seq`, then a dependent `INSERT` that reads the value the `UPDATE` just wrote.
 
-```sql
-UPDATE runs SET last_seq = last_seq + 1 WHERE run_id = p_run_id
-RETURNING last_seq INTO v_seq;
-```
+The `UPDATE` takes the write lock, so concurrent appends for one run queue behind it and each
+gets a distinct, gapless number (the sequence check in the live end-to-end runs confirms no
+gaps). `tests/test_events.py` fires five appends concurrently and asserts `[1,2,3,4,5]`; that
+test fails against the naive implementation.
 
-`UPDATE ... RETURNING` takes a row lock, so concurrent appends for one run queue
-behind it and each gets a distinct, gapless number. One round trip, one
-transaction. `tests/test_events.py` fires five appends concurrently and asserts
-`[1,2,3,4,5]` — that test fails against the naive implementation.
-
-Append-only is enforced by a trigger that raises on `UPDATE` and `DELETE`, not
-by convention. RLS is on with no policies: the anon key sees nothing, and the
-service key stays server-side.
+Append-only is enforced by triggers that `RAISE(ABORT)` on `UPDATE` and `DELETE` of `events`,
+not by convention. Turso has no row-level security: the database token is held server-side
+only, which is the whole access boundary (see `migrations/001_events.sql`).
 
 ## Schema
 
@@ -112,7 +110,11 @@ An honest caveat we state rather than hide: every event append is a network
 round trip charged to wall clock but *not* to node latency, so PE understates
 parallelism for very fast nodes. At 0.6 s per branch it measured 1.89 despite
 the branches provably overlapping by timestamp. At realistic agent latencies
-(6–13 s) the overhead is noise and PE approaches the branch count.
+(6–13 s) the overhead should be noise. On the live site we measured 0.77 to 0.83 on runs
+whose compiled graph was mostly a sequential chain (where about 1 is expected). A fully
+parallel graph has not been measured live; phrasing a goal as independent parts made the planner
+produce three parallel branches in about half of our compiles, but a model plans the graph, so
+the shape varies run to run.
 
 Budgets are enforced in code. `budget_tokens` is counted per node and the call
 is cut off; `timeout_s` is an `asyncio.timeout` around the node. The model is
@@ -136,7 +138,10 @@ assignment is reproducible for replay but does not track member order.
 Authorship is re-attached only in the verdict.
 
 Ranking is Borda, so second place still scores. A member that returns unusable
-JSON abstains rather than corrupting the tally. Disagreement is the share of
+JSON, times out, is rate-limited (HTTP 429) or returns an empty reply drops out
+rather than corrupting the tally, so the council deliberates with fewer members.
+It needs at least two to rank; with one it is effectively a single call (measured:
+this happened on every live compile before the default models were fixed). Disagreement is the share of
 rankers who disagreed on first place; above the threshold the verdict is flagged
 `escalated` rather than silently passed.
 
@@ -160,14 +165,16 @@ Deliberately minimal, and we say so:
 
 - **Memory conflict resolution** is last-write-wins *with full provenance
   history*, so conflicts are visible and auditable. Not a CRDT.
-- **Artifact store** is a Postgres table plus Supabase Storage, not a
-  content-addressed blob system.
+- **Artifact store** is a table in the same database, not a content-addressed blob system and
+  not object storage.
+- **Memory** is process-local with TTL-based staleness eviction, so it does not survive across
+  serverless instances.
 
-Deliberately deferred (the PS itself labels these "hard-mode"):
+Deliberately deferred:
 
-- Workflow version migration
 - Nested subgraph recursion beyond one level
-- Stale-memory eviction
 
-We took the two hard-mode items with the highest demonstrable value —
-adversarial blocking and conflict arbitration — and named the rest.
+Implemented beyond the core contract: adversarial blocking (undeclared tools and injected
+instructions), conflict arbitration, workflow version migration (`backend/engine/migrations.py`)
+and stale-memory eviction. Each has a live demo endpoint (`/api/demo/red-agent`,
+`/api/demo/version-migration`, `/api/demo/stale-memory`).

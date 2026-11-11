@@ -65,8 +65,8 @@ The clean and recovered runs use a **fixture completer** with fixed outputs, so
 the committed files are stable artefacts that do not change on every export.
 The agent outputs in them are therefore illustrative, not model-generated.
 
-Everything else in the files is real: real event rows from the real Supabase
-event log, real sequence numbers, real timestamps, real schema validation, real
+Everything else in the files is real: real event rows written by the real event
+store (Turso/libSQL or SQLite), real sequence numbers, real timestamps, real schema validation, real
 compensation. The adversarial run is entirely real — the guard and the screen
 are the actual code paths.
 
